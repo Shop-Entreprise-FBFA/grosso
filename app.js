@@ -643,6 +643,7 @@ async function viewStaff() {
           <td><code>${esc(c.invite_code || "—")}</code></td>
           <td><span class="badge ${c.is_active ? "badge-ok" : "badge-danger"}">${c.is_active ? "Active" : "Désactivée"}</span></td>
           <td class="num" style="white-space:nowrap">
+            <button class="btn btn-sm btn-ghost viewco" data-id="${c.id}" data-name="${esc(c.name)}">👁 Voir</button>
             <button class="btn btn-sm btn-ghost editco" data-id="${c.id}">Modifier</button>
             <button class="btn btn-sm btn-ghost regenco" data-id="${c.id}">Régén. code</button>
             <button class="btn btn-sm btn-ghost toggleco" data-id="${c.id}" data-active="${c.is_active}">${c.is_active ? "Désactiver" : "Activer"}</button>
@@ -664,6 +665,7 @@ async function viewStaff() {
     </div>`;
 
   $("#btnNewCo").onclick = () => companyForm(null);
+  $$(".viewco").forEach(b => b.onclick = () => companyPanel(b.dataset.id, b.dataset.name));
   $$(".editco").forEach(b => b.onclick = () => companyForm(companies.find(c => c.id === b.dataset.id)));
   $$(".regenco").forEach(b => b.onclick = async () => {
     const { data, error } = await sb.rpc("admin_regenerate_code", { p_company_id: b.dataset.id });
@@ -676,8 +678,12 @@ async function viewStaff() {
     toast("État mis à jour", "ok"); route();
   });
   $$(".delco").forEach(b => b.onclick = async () => {
-    if (!confirm("Supprimer définitivement cette entreprise ? Impossible si des commandes existent.")) return;
-    const { error } = await sb.rpc("admin_delete_company", { p_company_id: b.dataset.id });
+    if (!confirm("Supprimer définitivement cette entreprise ?")) return;
+    let { error } = await sb.rpc("admin_delete_company", { p_company_id: b.dataset.id, p_force: false });
+    if (error && /commandes existent/i.test(error.message || "")) {
+      if (!confirm("Cette entreprise a des commandes. Forcer la suppression va aussi supprimer ces commandes définitivement. Continuer ?")) return;
+      ({ error } = await sb.rpc("admin_delete_company", { p_company_id: b.dataset.id, p_force: true }));
+    }
     if (error) return toast(humanError(error), "err");
     toast("Entreprise supprimée", "ok"); route();
   });
@@ -736,4 +742,40 @@ function companyForm(c) {
     if (error) return toast(humanError(error), "err");
     closeModal(); toast(c ? "Entreprise mise à jour" : "Entreprise créée", "ok"); route();
   };
+}
+
+async function companyPanel(companyId, companyName) {
+  openModal(companyName, `<p class="hint">Chargement…</p>`);
+
+  const [{ data: members, error: e1 }, { data: products, error: e2 }, { data: orders, error: e3 }] = await Promise.all([
+    sb.rpc("admin_company_members", { p_company_id: companyId }),
+    sb.rpc("admin_company_products", { p_company_id: companyId }),
+    sb.rpc("admin_company_orders", { p_company_id: companyId }),
+  ]);
+  if (e1 || e2 || e3) {
+    $("#modalContent").innerHTML = `<p class="hint">${esc(humanError(e1 || e2 || e3))}</p>`;
+    return;
+  }
+
+  $("#modalContent").innerHTML = `
+    <h3 style="margin-top:0">👥 Membres (${members.length})</h3>
+    ${members.length ? `<table><thead><tr><th>Nom</th><th>Rôle</th></tr></thead><tbody>
+      ${members.map(m => `<tr><td>${esc(m.full_name || m.discord_username || "—")}</td>
+        <td><span class="badge ${m.role === "admin" ? "badge-ok" : ""}">${m.role === "admin" ? "Administrateur" : "Membre"}</span></td></tr>`).join("")}
+    </tbody></table>` : `<p class="hint">Aucun membre.</p>`}
+
+    <h3>📦 Articles (${products.length})</h3>
+    ${products.length ? `<table><thead><tr><th>Article</th><th>Catégorie</th><th class="num">Prix HT</th><th class="num">Stock</th><th>État</th></tr></thead><tbody>
+      ${products.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.category || "—")}</td>
+        <td class="num">${money(p.price_ht)}</td><td class="num">${p.stock}</td>
+        <td><span class="badge ${p.is_active ? "badge-ok" : ""}">${p.is_active ? "En ligne" : "Masqué"}</span></td></tr>`).join("")}
+    </tbody></table>` : `<p class="hint">Aucun article.</p>`}
+
+    <h3>🧾 Commandes récentes (${orders.length})</h3>
+    ${orders.length ? `<table><thead><tr><th>Réf.</th><th>Type</th><th>Contrepartie</th><th>Statut</th><th class="num">Total HT</th></tr></thead><tbody>
+      ${orders.map(o => `<tr><td>${esc(o.reference)}</td><td>${o.sens === "vente" ? "📤 Vente" : "📥 Achat"}</td>
+        <td>${esc(o.other_name || "—")}</td><td><span class="badge ${STATUS[o.status]?.cls || ""}">${STATUS[o.status]?.label || o.status}</span></td>
+        <td class="num">${money(o.total_ht)}</td></tr>`).join("")}
+    </tbody></table>` : `<p class="hint">Aucune commande.</p>`}
+  `;
 }
