@@ -31,10 +31,8 @@ const state = { user: null, profile: null, company: null, cart: [] };
   if (error || !profile) {
     document.body.innerHTML = `<div class="center-screen"><div class="setup card card-pad">
       <h1>Profil introuvable</h1>
-      <p>Votre compte existe mais aucune entreprise n'y est rattachée. Cela arrive si le script
-      <code>supabase/schema.sql</code> n'a pas été exécuté <b>avant</b> la création du compte.</p>
-      <p>Exécutez le script dans Supabase, supprimez l'utilisateur dans <b>Authentication → Users</b>,
-      puis recréez votre compte.</p>
+      <p>Votre compte Discord est bien connecté, mais aucun profil n'a été créé côté base de données.
+      Vérifiez que <code>supabase/migration_discord.sql</code> a bien été exécuté, puis reconnectez-vous.</p>
       <button class="btn btn-primary" onclick="location.href='index.html'">Retour</button>
     </div></div>`;
     await sb.auth.signOut();
@@ -42,16 +40,38 @@ const state = { user: null, profile: null, company: null, cart: [] };
   }
 
   state.profile = profile;
-  state.company = profile.companies;
+  state.company = profile.companies || null;
   loadCart();
 
   $("#brandName").textContent = window.CONFIG.APP_NAME || "Grosso";
-  $("#whoCompany").textContent = state.company?.name || "Entreprise";
-  $("#whoEmail").textContent = state.user.email;
+  const discordName = state.user.user_metadata?.full_name
+    || state.user.user_metadata?.name
+    || state.user.user_metadata?.preferred_username
+    || "Discord";
+  $("#whoEmail").textContent = discordName;
   $("#logout").onclick = async () => { await sb.auth.signOut(); location.replace("index.html"); };
   $("#modalClose").onclick = closeModal;
   $("#modalBg").onclick = (e) => { if (e.target.id === "modalBg") closeModal(); };
 
+  if (profile.is_staff) $("#navStaff").hidden = false;
+
+  if (!state.company) {
+    if (profile.is_staff) {
+      // Staff sans entreprise : accès direct à la console, nav entreprise masquée
+      $$(".nav-co").forEach((a) => (a.hidden = true));
+      $("#whoCompany").textContent = "Staff";
+      $("#boot").hidden = true;
+      $("#app").hidden = false;
+      window.addEventListener("hashchange", route);
+      location.hash = "#staff";
+      route();
+      return;
+    }
+    renderJoinScreen();
+    return;
+  }
+
+  $("#whoCompany").textContent = state.company?.name || "Entreprise";
   $("#boot").hidden = true;
   $("#app").hidden = false;
 
@@ -60,6 +80,31 @@ const state = { user: null, profile: null, company: null, cart: [] };
   route();
 })();
 
+/* --------------------------------------------------- écran "rejoindre" */
+function renderJoinScreen() {
+  document.body.innerHTML = `<div class="center-screen"><div class="setup card card-pad" style="max-width:480px">
+    <h1>Rejoindre votre entreprise</h1>
+    <p class="hint">Votre compte Discord est connecté. Entrez le code d'invitation transmis par votre entreprise pour accéder à votre espace (5 membres maximum par entreprise).</p>
+    <form id="joinForm">
+      <div class="field"><label>Code d'invitation</label><input id="joinCode" required placeholder="4C7K-R2AB" style="text-transform:uppercase;font-family:monospace"></div>
+      <button class="btn btn-primary btn-block" type="submit">Rejoindre</button>
+    </form>
+    <p id="joinMsg" class="hint" style="margin-top:1rem"></p>
+    <button class="btn btn-ghost" id="joinLogout" style="margin-top:1rem;width:100%">Se déconnecter</button>
+  </div></div>`;
+
+  $("#joinLogout").onclick = async () => { await sb.auth.signOut(); location.replace("index.html"); };
+  $("#joinForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const code = $("#joinCode").value.trim().toUpperCase();
+    const msg = $("#joinMsg");
+    msg.textContent = "";
+    const { error } = await sb.rpc("join_company", { p_code: code });
+    if (error) { msg.textContent = humanError(error); return; }
+    location.reload();
+  };
+}
+
 /* --------------------------------------------------------------- panier */
 const cartKey = () => "grosso_cart_" + state.user.id;
 function loadCart() { try { state.cart = JSON.parse(localStorage.getItem(cartKey())) || []; } catch { state.cart = []; } }
@@ -67,6 +112,7 @@ function saveCart() { localStorage.setItem(cartKey(), JSON.stringify(state.cart)
 function refreshCartBadge() {
   const n = state.cart.reduce((s, i) => s + i.qty, 0);
   const b = $("#cartCount");
+  if (!b) return;
   b.textContent = n; b.hidden = n === 0;
 }
 function addToCart(p, qty) {
@@ -97,10 +143,11 @@ const VIEWS = {
   achats: viewPurchases,
   ventes: viewSales,
   entreprise: viewCompany,
+  staff: viewStaff,
 };
 
 async function route() {
-  const name = (location.hash.replace("#", "") || "accueil");
+  const name = (location.hash.replace("#", "") || (state.company ? "accueil" : "staff"));
   const fn = VIEWS[name] || viewHome;
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === name));
   $("#view").innerHTML = `<p class="hint">Chargement…</p>`;
@@ -465,26 +512,62 @@ function statusButtons(o, sens) {
 /* ========================================================== ENTREPRISE */
 async function viewCompany() {
   const c = state.company;
+  const isAdmin = state.profile.role === "admin";
+
+  const { data: members } = await sb.from("profiles")
+    .select("id, full_name, discord_username, role, created_at")
+    .eq("company_id", c.id).order("created_at");
+
   $("#view").innerHTML = head("Mon entreprise", "Ces informations sont visibles par les autres membres") + `
-    <div class="card card-pad" style="max-width:640px">
-      <form id="cf">
-        <div class="field"><label>Nom de l'entreprise *</label><input name="name" required value="${esc(c.name || "")}"></div>
-        <div class="row">
-          <div class="field"><label>SIRET</label><input name="siret" value="${esc(c.siret || "")}"></div>
-          <div class="field"><label>Secteur d'activité</label><input name="sector" value="${esc(c.sector || "")}"></div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));align-items:start;gap:1.2rem">
+
+      <div class="card card-pad">
+        <form id="cf">
+          <div class="field"><label>Nom de l'entreprise *</label><input name="name" required value="${esc(c.name || "")}" ${isAdmin ? "" : "disabled"}></div>
+          <div class="row">
+            <div class="field"><label>Secteur d'activité</label><input name="sector" value="${esc(c.sector || "")}" ${isAdmin ? "" : "disabled"}></div>
+            <div class="field"><label>Ville</label><input name="city" value="${esc(c.city || "")}" ${isAdmin ? "" : "disabled"}></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Pays</label><input name="country" value="${esc(c.country || "France")}" ${isAdmin ? "" : "disabled"}></div>
+            <div class="field"><label>Téléphone</label><input name="phone" value="${esc(c.phone || "")}" ${isAdmin ? "" : "disabled"}></div>
+          </div>
+          <div class="field"><label>Présentation</label><textarea name="description" ${isAdmin ? "" : "disabled"}>${esc(c.description || "")}</textarea></div>
+          ${isAdmin
+            ? `<button class="btn btn-primary" type="submit">Enregistrer</button>`
+            : `<p class="hint">Seul l'administrateur de l'entreprise peut modifier ces informations.</p>`}
+        </form>
+      </div>
+
+      ${isAdmin ? `<div class="card card-pad">
+        <h3>Code d'invitation</h3>
+        <p class="hint">Partagez ce code avec vos collègues (${c.max_members} membres maximum). Il ne consomme aucune place tant qu'il n'est pas utilisé.</p>
+        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+          <input id="inviteCode" readonly value="${esc(c.invite_code || "—")}" style="font-family:monospace;font-size:1.1rem;font-weight:700;flex:1;min-width:140px">
+          <button class="btn btn-sm btn-ghost" id="copyCode">Copier</button>
+          <button class="btn btn-sm btn-danger" id="regenCode">Régénérer</button>
         </div>
-        <div class="row">
-          <div class="field"><label>Ville</label><input name="city" value="${esc(c.city || "")}"></div>
-          <div class="field"><label>Pays</label><input name="country" value="${esc(c.country || "France")}"></div>
-        </div>
-        <div class="field"><label>Téléphone</label><input name="phone" value="${esc(c.phone || "")}"></div>
-        <div class="field"><label>Présentation</label><textarea name="description" placeholder="Votre activité, vos gammes, vos zones de livraison…">${esc(c.description || "")}</textarea></div>
-        <button class="btn btn-primary" type="submit">Enregistrer</button>
-      </form>
+      </div>` : ""}
+
+      <div class="card" style="grid-column:1/-1">
+        <div class="card-pad" style="padding-bottom:.4rem"><h3>Membres (${members?.length || 0}/${c.max_members})</h3></div>
+        <table><thead><tr><th>Nom</th><th>Rôle</th><th></th></tr></thead><tbody>
+          ${(members || []).map(m => `<tr>
+            <td>${esc(m.full_name || m.discord_username || "—")}${m.id === state.user.id ? " (vous)" : ""}</td>
+            <td><span class="badge ${m.role === "admin" ? "badge-ok" : ""}">${m.role === "admin" ? "Administrateur" : "Membre"}</span></td>
+            <td class="num" style="white-space:nowrap">
+              ${isAdmin && m.id !== state.user.id ? `
+                ${m.role !== "admin" ? `<button class="btn btn-sm btn-ghost promote" data-id="${m.id}">Promouvoir</button>` : ""}
+                <button class="btn btn-sm btn-danger remove" data-id="${m.id}">Retirer</button>` : ""}
+              ${!isAdmin && m.id === state.user.id ? `<button class="btn btn-sm btn-danger leave">Quitter l'entreprise</button>` : ""}
+            </td></tr>`).join("")}
+        </tbody></table>
+      </div>
     </div>`;
 
   $("#cf").onsubmit = async (e) => {
     e.preventDefault();
+    if (!isAdmin) return;
     const f = new FormData(e.target);
     const payload = Object.fromEntries([...f.entries()].map(([k, v]) => [k, String(v).trim() || null]));
     const { data, error } = await sb.from("companies").update(payload).eq("id", c.id).select().single();
@@ -492,5 +575,165 @@ async function viewCompany() {
     state.company = data;
     $("#whoCompany").textContent = data.name;
     toast("Fiche entreprise enregistrée", "ok");
+  };
+
+  if (isAdmin) {
+    $("#copyCode").onclick = () => {
+      navigator.clipboard.writeText($("#inviteCode").value || "");
+      toast("Code copié", "ok");
+    };
+    $("#regenCode").onclick = async () => {
+      if (!confirm("L'ancien code ne fonctionnera plus. Continuer ?")) return;
+      const { data, error } = await sb.rpc("regenerate_invite_code");
+      if (error) return toast(humanError(error), "err");
+      state.company.invite_code = data;
+      toast("Nouveau code généré", "ok"); route();
+    };
+    $$(".promote").forEach(b => b.onclick = async () => {
+      const { error } = await sb.rpc("promote_member", { p_profile_id: b.dataset.id });
+      if (error) return toast(humanError(error), "err");
+      toast("Membre promu administrateur", "ok"); route();
+    });
+    $$(".remove").forEach(b => b.onclick = async () => {
+      if (!confirm("Retirer ce membre de l'entreprise ?")) return;
+      const { error } = await sb.rpc("remove_member", { p_profile_id: b.dataset.id });
+      if (error) return toast(humanError(error), "err");
+      toast("Membre retiré", "ok"); route();
+    });
+  } else {
+    const leaveBtn = document.querySelector(".leave");
+    if (leaveBtn) leaveBtn.onclick = async () => {
+      if (!confirm("Quitter cette entreprise ?")) return;
+      const { error } = await sb.rpc("leave_company");
+      if (error) return toast(humanError(error), "err");
+      location.reload();
+    };
+  }
+}
+
+/* ============================================================= STAFF */
+async function viewStaff() {
+  if (!state.profile.is_staff) {
+    $("#view").innerHTML = empty("⛔", "Accès réservé au staff");
+    return;
+  }
+
+  const [{ data: companies, error: e1 }, { data: counts }, { data: allProfiles }] = await Promise.all([
+    sb.from("companies").select("*").order("created_at", { ascending: false }),
+    sb.rpc("admin_company_counts"),
+    sb.rpc("admin_list_all_profiles"),
+  ]);
+  if (e1) throw e1;
+
+  const countMap = Object.fromEntries((counts || []).map(c => [c.company_id, c]));
+  const pending = (allProfiles || []).filter(p => !p.company_id);
+
+  $("#view").innerHTML = head("Console staff", "Créez et gérez toutes les entreprises sans y consommer de place",
+    `<button class="btn btn-primary" id="btnNewCo">+ Nouvelle entreprise</button>`) + `
+
+    <div class="card" style="margin-bottom:1.2rem">
+      <div class="card-pad" style="padding-bottom:.4rem"><h3>Entreprises (${companies.length})</h3></div>
+      ${companies.length ? `<table><thead><tr><th>Nom</th><th>Ville</th><th class="num">Membres</th><th>Code</th><th>État</th><th></th></tr></thead>
+      <tbody>${companies.map(c => {
+        const cnt = countMap[c.id] || { member_count: 0 };
+        return `<tr>
+          <td><b>${esc(c.name)}</b><div class="hint">${esc(c.sector || "—")}</div></td>
+          <td>${esc(c.city || "—")}</td>
+          <td class="num">${cnt.member_count}/${c.max_members}</td>
+          <td><code>${esc(c.invite_code || "—")}</code></td>
+          <td><span class="badge ${c.is_active ? "badge-ok" : "badge-danger"}">${c.is_active ? "Active" : "Désactivée"}</span></td>
+          <td class="num" style="white-space:nowrap">
+            <button class="btn btn-sm btn-ghost editco" data-id="${c.id}">Modifier</button>
+            <button class="btn btn-sm btn-ghost regenco" data-id="${c.id}">Régén. code</button>
+            <button class="btn btn-sm btn-ghost toggleco" data-id="${c.id}" data-active="${c.is_active}">${c.is_active ? "Désactiver" : "Activer"}</button>
+            <button class="btn btn-sm btn-danger delco" data-id="${c.id}">Suppr.</button>
+          </td></tr>`;
+      }).join("")}</tbody></table>` : `<div class="card-pad"><p class="hint">Aucune entreprise créée pour l'instant.</p></div>`}
+    </div>
+
+    <div class="card">
+      <div class="card-pad" style="padding-bottom:.4rem"><h3>Comptes en attente de rattachement (${pending.length})</h3></div>
+      ${pending.length ? `<table><thead><tr><th>Discord</th><th>Connecté le</th><th>Rattacher à</th><th></th></tr></thead>
+      <tbody>${pending.map(p => `<tr>
+        <td>${esc(p.full_name || p.discord_username || p.id)}</td>
+        <td class="hint">${dateFR(p.created_at)}</td>
+        <td><select class="attachSelect" data-id="${p.id}"><option value="">Choisir une entreprise…</option>
+          ${companies.filter(c => c.is_active).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></td>
+        <td><button class="btn btn-sm btn-primary attachBtn" data-id="${p.id}">Attacher</button></td>
+      </tr>`).join("")}</tbody></table>` : `<div class="card-pad"><p class="hint">Aucun compte en attente.</p></div>`}
+    </div>`;
+
+  $("#btnNewCo").onclick = () => companyForm(null);
+  $$(".editco").forEach(b => b.onclick = () => companyForm(companies.find(c => c.id === b.dataset.id)));
+  $$(".regenco").forEach(b => b.onclick = async () => {
+    const { data, error } = await sb.rpc("admin_regenerate_code", { p_company_id: b.dataset.id });
+    if (error) return toast(humanError(error), "err");
+    toast("Nouveau code : " + data, "ok"); route();
+  });
+  $$(".toggleco").forEach(b => b.onclick = async () => {
+    const { error } = await sb.rpc("admin_set_active", { p_company_id: b.dataset.id, p_active: b.dataset.active !== "true" });
+    if (error) return toast(humanError(error), "err");
+    toast("État mis à jour", "ok"); route();
+  });
+  $$(".delco").forEach(b => b.onclick = async () => {
+    if (!confirm("Supprimer définitivement cette entreprise ? Impossible si des commandes existent.")) return;
+    const { error } = await sb.rpc("admin_delete_company", { p_company_id: b.dataset.id });
+    if (error) return toast(humanError(error), "err");
+    toast("Entreprise supprimée", "ok"); route();
+  });
+  $$(".attachBtn").forEach(b => b.onclick = async () => {
+    const sel = document.querySelector(`.attachSelect[data-id="${b.dataset.id}"]`);
+    if (!sel.value) return toast("Choisissez une entreprise", "err");
+    const { error } = await sb.rpc("admin_attach_profile", { p_profile_id: b.dataset.id, p_company_id: sel.value });
+    if (error) return toast(humanError(error), "err");
+    toast("Compte rattaché", "ok"); route();
+  });
+}
+
+function companyForm(c) {
+  openModal(c ? "Modifier l'entreprise" : "Nouvelle entreprise", `
+    <form id="cof">
+      <div class="field"><label>Nom *</label><input name="name" required value="${esc(c?.name || "")}"></div>
+      <div class="row">
+        <div class="field"><label>Secteur</label><input name="sector" value="${esc(c?.sector || "")}"></div>
+        <div class="field"><label>Ville</label><input name="city" value="${esc(c?.city || "")}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Pays</label><input name="country" value="${esc(c?.country || "France")}"></div>
+        <div class="field"><label>Téléphone</label><input name="phone" value="${esc(c?.phone || "")}"></div>
+      </div>
+      <div class="field"><label>Présentation</label><textarea name="description">${esc(c?.description || "")}</textarea></div>
+      <div class="row">
+        <div class="field"><label>Membres max</label><input name="max_members" type="number" min="1" step="1" value="${c?.max_members ?? 5}"></div>
+        <div class="field"><label>ID salon Discord (commandes)</label><input name="discord_channel_id" value="${esc(c?.discord_channel_id || "")}"></div>
+      </div>
+      <div style="display:flex;gap:.6rem;justify-content:flex-end">
+        <button type="button" class="btn btn-ghost" id="cofCancel">Annuler</button>
+        <button type="submit" class="btn btn-primary">${c ? "Enregistrer" : "Créer"}</button>
+      </div>
+    </form>`);
+
+  $("#cofCancel").onclick = closeModal;
+  $("#cof").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const payload = {
+      p_name: f.get("name").trim(),
+      p_sector: f.get("sector").trim() || null,
+      p_city: f.get("city").trim() || null,
+      p_country: f.get("country").trim() || "France",
+      p_phone: f.get("phone").trim() || null,
+      p_description: f.get("description").trim() || null,
+      p_max_members: Math.max(parseInt(f.get("max_members"), 10) || 5, 1),
+      p_discord_channel_id: f.get("discord_channel_id").trim() || null,
+    };
+    let error;
+    if (c) {
+      ({ error } = await sb.rpc("admin_update_company", { p_id: c.id, ...payload }));
+    } else {
+      ({ error } = await sb.rpc("admin_create_company", payload));
+    }
+    if (error) return toast(humanError(error), "err");
+    closeModal(); toast(c ? "Entreprise mise à jour" : "Entreprise créée", "ok"); route();
   };
 }
