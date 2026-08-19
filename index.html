@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grosso — Place de marché B2B</title>
+<meta name="description" content="Plateforme de commerce en gros : chaque entreprise gère son catalogue, consulte celui des autres et passe commande.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+
+<div class="landing">
+  <section class="landing-hero">
+    <div class="logo" id="brandName">Grosso</div>
+    <h1>Achetez et vendez en gros, entre professionnels</h1>
+    <p id="tagline">Chaque entreprise dispose de son espace : elle publie ses articles, consulte le catalogue des autres membres et passe commande en quelques clics.</p>
+    <ul>
+      <li><span class="check">✓</span><span><b>Votre espace entreprise</b> — catalogue, tarifs, stocks, sous votre contrôle</span></li>
+      <li><span class="check">✓</span><span><b>Catalogue partagé</b> — parcourez et recherchez les articles de tous les membres</span></li>
+      <li><span class="check">✓</span><span><b>Commandes en ligne</b> — panier, bon de commande, suivi des statuts</span></li>
+      <li><span class="check">✓</span><span><b>Deux tableaux de bord</b> — ce que vous vendez, ce que vous achetez</span></li>
+    </ul>
+  </section>
+
+  <section class="landing-form">
+    <div class="box">
+      <div class="tabs">
+        <button id="tabLogin" class="active" type="button">Se connecter</button>
+        <button id="tabSignup" type="button">Créer un compte</button>
+      </div>
+
+      <!-- Connexion -->
+      <form id="formLogin">
+        <h2>Bon retour parmi nous</h2>
+        <p class="hint" style="margin-bottom:1.2rem">Connectez-vous à l'espace de votre entreprise.</p>
+        <div class="field">
+          <label for="li-email">E-mail professionnel</label>
+          <input id="li-email" type="email" autocomplete="email" required placeholder="contact@entreprise.fr">
+        </div>
+        <div class="field">
+          <label for="li-pass">Mot de passe</label>
+          <input id="li-pass" type="password" autocomplete="current-password" required placeholder="••••••••">
+        </div>
+        <button class="btn btn-primary btn-block" type="submit">Se connecter</button>
+      </form>
+
+      <!-- Inscription -->
+      <form id="formSignup" hidden>
+        <h2>Créer l'espace de votre entreprise</h2>
+        <p class="hint" style="margin-bottom:1.2rem">Un compte = une entreprise. Vous pourrez publier vos articles immédiatement.</p>
+        <div class="field">
+          <label for="su-company">Nom de l'entreprise *</label>
+          <input id="su-company" required placeholder="Distribution Martin SARL">
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="su-city">Ville</label>
+            <input id="su-city" placeholder="Lyon">
+          </div>
+          <div class="field">
+            <label for="su-sector">Secteur</label>
+            <input id="su-sector" placeholder="Alimentaire">
+          </div>
+        </div>
+        <div class="field">
+          <label for="su-name">Votre nom</label>
+          <input id="su-name" autocomplete="name" placeholder="Thomas Martin">
+        </div>
+        <div class="field">
+          <label for="su-email">E-mail professionnel *</label>
+          <input id="su-email" type="email" autocomplete="email" required placeholder="contact@entreprise.fr">
+        </div>
+        <div class="field">
+          <label for="su-pass">Mot de passe * <span class="hint">(8 caractères minimum)</span></label>
+          <input id="su-pass" type="password" autocomplete="new-password" minlength="8" required placeholder="••••••••">
+        </div>
+        <button class="btn btn-primary btn-block" type="submit">Créer mon espace</button>
+      </form>
+
+      <p id="authMsg" class="hint" style="margin-top:1rem"></p>
+    </div>
+  </section>
+</div>
+
+<div id="toasts"></div>
+
+<script src="assets/js/config.js"></script>
+<script type="module" src="assets/js/auth.js"></script>
+</body>
+</html>

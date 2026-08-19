@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Espace entreprise — Grosso</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+
+<div id="boot" class="center-screen"><p class="hint">Chargement de votre espace…</p></div>
+
+<div class="app" id="app" hidden>
+  <aside class="sidebar">
+    <div class="brand" id="brandName">Grosso</div>
+    <nav id="nav">
+      <a href="#accueil"            data-view="accueil">📊 <span>Tableau de bord</span></a>
+      <a href="#catalogue"          data-view="catalogue">🌐 <span>Catalogue général</span></a>
+      <a href="#mes-articles"       data-view="mes-articles">📦 <span>Mes articles</span></a>
+      <a href="#panier"             data-view="panier">🛒 <span>Panier</span><span class="cart-count" id="cartCount" hidden>0</span></a>
+      <a href="#achats"             data-view="achats">📥 <span>Mes commandes</span></a>
+      <a href="#ventes"             data-view="ventes">📤 <span>Commandes reçues</span></a>
+      <a href="#entreprise"         data-view="entreprise">🏢 <span>Mon entreprise</span></a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="who">
+      <b id="whoCompany">—</b>
+      <span id="whoEmail"></span>
+      <button class="btn btn-sm btn-ghost" id="logout" style="margin-top:.6rem;width:100%;color:#cfd6e4">Se déconnecter</button>
+    </div>
+  </aside>
+
+  <main class="main" id="view"></main>
+</div>
+
+<!-- Modale générique -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <header><h2 id="modalTitle">Titre</h2><button class="x" id="modalClose" aria-label="Fermer">×</button></header>
+    <div class="content" id="modalContent"></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="assets/js/config.js"></script>
+<script type="module" src="assets/js/app.js"></script>
+</body>
+</html>
