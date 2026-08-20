@@ -1111,6 +1111,7 @@ async function viewAnnouncements() {
             ${(state.profile.is_staff || (a.company_id && state.activeCompany?.id === a.company_id && state.activeRole === "admin")) ? `<button class="btn btn-sm btn-danger delAnn" data-id="${a.id}">Suppr.</button>` : ""}
           </div>
           <h3 style="margin:.4rem 0">${esc(a.title)}</h3>
+          ${a.image_url ? `<img src="${esc(a.image_url)}" alt="" style="max-width:100%;border-radius:8px;margin-bottom:.5rem">` : ""}
           ${a.body ? `<p>${esc(a.body)}</p>` : ""}
         </div>
       </div>`).join("") : empty("📰", "Aucune actualité pour le moment"));
@@ -1129,6 +1130,7 @@ function announcementForm(companyId) {
   openModal(companyId ? "Actualité de mon entreprise" : "Actualité plateforme", `
     <form id="af">
       <div class="field"><label>Titre *</label><input name="title" required></div>
+      <div class="field"><label>Image (URL, facultatif)</label><input name="image_url" type="url" placeholder="https://…"></div>
       <div class="field"><label>Message</label><textarea name="body"></textarea></div>
       <div style="display:flex;gap:.6rem;justify-content:flex-end">
         <button type="button" class="btn btn-ghost" id="afCancel">Annuler</button>
@@ -1139,7 +1141,7 @@ function announcementForm(companyId) {
   $("#af").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    const { error } = await sb.rpc("create_announcement", { p_title: f.get("title").trim(), p_body: f.get("body").trim() || null, p_company_id: companyId });
+    const { error } = await sb.rpc("create_announcement", { p_title: f.get("title").trim(), p_body: f.get("body").trim() || null, p_company_id: companyId, p_image_url: f.get("image_url").trim() || null });
     if (error) return toast(humanError(error), "err");
     closeModal(); toast("Actualité publiée", "ok"); route();
   };
