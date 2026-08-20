@@ -637,12 +637,12 @@ async function viewCart() {
   const totalWeight = state.cart.reduce((s, i) => s + (Number(i.weight_kg) || 0) * i.qty, 0);
   const missingWeight = state.cart.some(i => !i.weight_kg);
 
-  const deliveryPanel = (deliveryCos && deliveryCos.length && sellers.length > 1) ? `
+  const deliveryPanel = (deliveryCos && deliveryCos.length) ? `
     <div class="card card-pad" style="margin-bottom:1.2rem">
       <label style="display:flex;gap:.5rem;align-items:center;font-weight:700;cursor:pointer">
         <input type="checkbox" id="groupedDelivery" style="width:auto"> 🚚 Livraison groupée
       </label>
-      <p class="hint" style="margin-top:.3rem">Vos commandes chez les ${sellers.length} fournisseurs sont livrées ensemble par une entreprise de livraison, à la date et au créneau de votre choix.</p>
+      <p class="hint" style="margin-top:.3rem">${sellers.length > 1 ? `Vos commandes chez les ${sellers.length} fournisseurs sont livrées ensemble` : "Votre commande est livrée"} par une entreprise de livraison, à la date et au créneau de votre choix.</p>
       <div id="deliveryOptions" hidden style="margin-top:.8rem;display:flex;flex-direction:column;gap:.6rem">
         <div class="row">
           <div class="field"><label>Entreprise de livraison</label><select id="deliveryCo">${deliveryCos.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select></div>
