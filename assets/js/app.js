@@ -92,6 +92,8 @@ function setActiveCompany(membership) {
   state.activeRole = membership.role;
   localStorage.setItem("grosso_active_company_" + state.user.id, membership.companies.id);
   renderCompanyBox();
+  const navD = $("#navDeliveries");
+  if (navD) navD.hidden = !state.activeCompany.is_delivery;
 }
 
 function renderCompanyBox() {
@@ -171,6 +173,7 @@ function addToCart(p, qty) {
   else state.cart.push({
     product_id: p.id, name: p.name, price: Number(p.price_ht), unit: p.unit,
     min_qty: p.min_qty, seller_id: p.company_id, seller_name: p.company_name, qty,
+    weight_kg: p.weight_kg != null ? Number(p.weight_kg) : null,
   });
   saveCart();
   toast(`${p.name} ajouté au panier`, "ok");
@@ -194,6 +197,7 @@ const VIEWS = {
   ventes: viewSales,
   entreprise: viewCompany,
   staff: viewStaff,
+  livraisons: viewDeliveries,
 };
 
 async function route() {
@@ -394,6 +398,7 @@ function productForm(p) {
         <div class="field"><label>Quantité minimum</label><input name="min_qty" type="number" min="1" step="1" value="${p?.min_qty ?? 1}"></div>
         <div class="field"><label>Stock disponible</label><input name="stock" type="number" min="0" step="1" value="${p?.stock ?? 0}"></div>
       </div>
+      <div class="field"><label>Poids par ${esc(p?.unit || "unité")} en kg (facultatif, pour livraison groupée)</label><input name="weight_kg" type="number" step="0.001" min="0" value="${p?.weight_kg ?? ""}" placeholder="ex: 25"></div>
       <div class="field"><label>URL de l'image (facultatif)</label><input name="image_url" type="url" value="${esc(p?.image_url || "")}" placeholder="https://…"></div>
       <div class="field"><label style="display:flex;gap:.5rem;align-items:center;font-size:.95rem;color:var(--text)">
         <input type="checkbox" name="is_active" style="width:auto" ${p?.is_active !== false ? "checked" : ""}> Visible dans le catalogue général</label></div>
@@ -417,6 +422,7 @@ function productForm(p) {
       unit: f.get("unit"),
       min_qty: Math.max(parseInt(f.get("min_qty"), 10) || 1, 1),
       stock: parseInt(f.get("stock"), 10) || 0,
+      weight_kg: f.get("weight_kg").trim() === "" ? null : Number(f.get("weight_kg")),
       image_url: f.get("image_url").trim() || null,
       is_active: f.get("is_active") === "on",
       updated_at: new Date().toISOString(),
@@ -438,7 +444,36 @@ async function viewCart() {
   }
   const sellers = [...new Map(state.cart.map(i => [i.seller_id, i.seller_name])).entries()];
 
+  const { data: deliveryCos } = await sb.from("companies").select("id,name,price_per_tonne").eq("is_delivery", true).eq("is_active", true);
+  const totalWeight = state.cart.reduce((s, i) => s + (Number(i.weight_kg) || 0) * i.qty, 0);
+  const missingWeight = state.cart.some(i => !i.weight_kg);
+
+  const deliveryPanel = (deliveryCos && deliveryCos.length && sellers.length > 1) ? `
+    <div class="card card-pad" style="margin-bottom:1.2rem">
+      <label style="display:flex;gap:.5rem;align-items:center;font-weight:700;cursor:pointer">
+        <input type="checkbox" id="groupedDelivery" style="width:auto"> 🚚 Livraison groupée
+      </label>
+      <p class="hint" style="margin-top:.3rem">Vos commandes chez les ${sellers.length} fournisseurs sont livrées ensemble par une entreprise de livraison, à la date et au créneau de votre choix.</p>
+      <div id="deliveryOptions" hidden style="margin-top:.8rem;display:flex;flex-direction:column;gap:.6rem">
+        <div class="row">
+          <div class="field"><label>Entreprise de livraison</label><select id="deliveryCo">${deliveryCos.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select></div>
+          <div class="field"><label>Date souhaitée</label><input id="deliveryDate" type="date"></div>
+        </div>
+        <div class="field"><label>Créneau horaire</label><select id="deliverySlot">
+          <option value="8h-10h">8h - 10h</option>
+          <option value="10h-12h">10h - 12h</option>
+          <option value="12h-14h">12h - 14h</option>
+          <option value="14h-16h">14h - 16h</option>
+          <option value="16h-18h">16h - 18h</option>
+          <option value="18h-20h">18h - 20h</option>
+        </select></div>
+        <p class="hint">Poids total estimé : <b>${totalWeight.toFixed(1)} kg</b>${missingWeight ? " — certains articles n'ont pas de poids renseigné, le tarif final sera confirmé par le livreur." : ""}</p>
+        <button class="btn btn-primary" id="btnGroupedOrder">Passer toutes les commandes (livraison groupée)</button>
+      </div>
+    </div>` : "";
+
   $("#view").innerHTML = head("Panier", `Commande passée au nom de : ${esc(state.activeCompany.name)}`) +
+    deliveryPanel +
     sellers.map(([sid, sname]) => {
       const lines = state.cart.filter(i => i.seller_id === sid);
       const total = lines.reduce((s, i) => s + i.price * i.qty, 0);
@@ -485,6 +520,41 @@ async function viewCart() {
     toast("Commande envoyée au fournisseur", "ok");
     location.hash = "#achats";
   });
+
+  const groupedCb = $("#groupedDelivery");
+  if (groupedCb) {
+    const dateInput = $("#deliveryDate");
+    const today = new Date().toISOString().slice(0, 10);
+    dateInput.min = today; dateInput.value = today;
+    groupedCb.onchange = (e) => {
+      $("#deliveryOptions").hidden = !e.target.checked;
+      $$(".order").forEach(b => { b.disabled = e.target.checked; b.textContent = e.target.checked ? "Regroupé ci-dessus" : "Passer commande"; });
+    };
+    $("#btnGroupedOrder").onclick = async () => {
+      const deliveryCoId = $("#deliveryCo").value;
+      const date = $("#deliveryDate").value;
+      const slot = $("#deliverySlot").value;
+      if (!date) return toast("Choisissez une date de livraison", "err");
+      const btn = $("#btnGroupedOrder");
+      btn.disabled = true; btn.textContent = "Envoi…";
+
+      const orderIds = [];
+      for (const [sid] of sellers) {
+        const items = state.cart.filter(i => i.seller_id === sid).map(i => ({ product_id: i.product_id, quantity: i.qty }));
+        const note = $(`.note[data-sid="${sid}"]`)?.value.trim() || null;
+        const { data, error } = await sb.rpc("place_order", { p_buyer: state.activeCompany.id, p_seller: sid, p_items: items, p_note: note });
+        if (error) { btn.disabled = false; btn.textContent = "Passer toutes les commandes (livraison groupée)"; return toast(humanError(error), "err"); }
+        orderIds.push(data);
+      }
+      const { error: gError } = await sb.rpc("create_delivery_group", {
+        p_buyer: state.activeCompany.id, p_delivery_company: deliveryCoId, p_requested_date: date, p_time_slot: slot, p_order_ids: orderIds,
+      });
+      if (gError) { toast(humanError(gError), "err"); }
+      else toast("Commandes groupées envoyées", "ok");
+      state.cart = []; saveCart();
+      location.hash = "#achats"; route();
+    };
+  }
 }
 
 /* ====================================================== COMMANDES ACHAT */
@@ -502,6 +572,15 @@ async function ordersView(sens) {
 
   const names = await companyNames(data.map(o => o[other]));
 
+  let groupByOrder = {};
+  if (sens === "achat" && data.length) {
+    const { data: links } = await sb.from("delivery_group_orders")
+      .select("order_id, delivery_groups(time_slot, requested_date, status, delivery_company_id)")
+      .in("order_id", data.map(o => o.id));
+    const dgNames = await companyNames((links || []).map(l => l.delivery_groups?.delivery_company_id));
+    (links || []).forEach(l => { groupByOrder[l.order_id] = { ...l.delivery_groups, name: dgNames[l.delivery_groups?.delivery_company_id] }; });
+  }
+
   const title = sens === "achat" ? "Mes commandes" : "Commandes reçues";
   const sub = sens === "achat"
     ? "Ce que vous avez commandé auprès des autres entreprises"
@@ -515,6 +594,7 @@ async function ordersView(sens) {
           <span class="badge ${STATUS[o.status]?.cls || ""}" style="margin-left:.5rem">${STATUS[o.status]?.label || o.status}</span>
           <div class="hint">${sens === "achat" ? "Fournisseur" : "Client"} : <b>${esc(names[o[other]] || "—")}</b> · ${dateFR(o.created_at)}</div>
           ${o.note ? `<div class="hint">📝 ${esc(o.note)}</div>` : ""}
+          ${groupByOrder[o.id] ? `<div class="hint">🚚 Livraison groupée via <b>${esc(groupByOrder[o.id].name || "—")}</b> · ${groupByOrder[o.id].requested_date ? dateFR(groupByOrder[o.id].requested_date) : ""} · ${esc(groupByOrder[o.id].time_slot || "")}</div>` : ""}
         </div>
         <div style="text-align:right">
           <div class="hint">Total HT</div><b style="font-size:1.25rem">${money(o.total_ht)}</b>
@@ -583,6 +663,7 @@ async function viewCompany() {
             <div class="field"><label>Téléphone</label><input name="phone" value="${esc(c.phone || "")}" ${isAdmin ? "" : "disabled"}></div>
           </div>
           <div class="field"><label>Présentation</label><textarea name="description" ${isAdmin ? "" : "disabled"}>${esc(c.description || "")}</textarea></div>
+          ${c.is_delivery ? `<div class="field"><label>Tarif à la tonne (€ / 1000 kg)</label><input name="price_per_tonne" type="number" step="0.01" min="0" value="${c.price_per_tonne ?? ""}" ${isAdmin ? "" : "disabled"}></div>` : ""}
           ${isAdmin
             ? `<button class="btn btn-primary" type="submit">Enregistrer</button>`
             : `<p class="hint">Seul l'administrateur de l'entreprise peut modifier ces informations.</p>`}
@@ -619,7 +700,13 @@ async function viewCompany() {
     e.preventDefault();
     if (!isAdmin) return;
     const f = new FormData(e.target);
-    const payload = Object.fromEntries([...f.entries()].map(([k, v]) => [k, String(v).trim() || null]));
+    const payload = Object.fromEntries([...f.entries()]
+      .filter(([k]) => k !== "price_per_tonne")
+      .map(([k, v]) => [k, String(v).trim() || null]));
+    if (c.is_delivery) {
+      const rate = f.get("price_per_tonne");
+      payload.price_per_tonne = rate && rate.trim() !== "" ? Number(rate) : null;
+    }
     const { data, error } = await sb.from("companies").update(payload).eq("id", c.id).select().single();
     if (error) return toast(humanError(error), "err");
     state.activeCompany = data;
@@ -765,6 +852,9 @@ function companyForm(c) {
         <div class="field"><label>Membres max</label><input name="max_members" type="number" min="1" step="1" value="${c?.max_members ?? 5}"></div>
         <div class="field"><label>ID salon Discord (commandes)</label><input name="discord_channel_id" value="${esc(c?.discord_channel_id || "")}"></div>
       </div>
+      <div class="field"><label style="display:flex;gap:.5rem;align-items:center;font-size:.95rem;color:var(--text)">
+        <input type="checkbox" name="is_delivery" style="width:auto" ${c?.is_delivery ? "checked" : ""}> Entreprise de livraison (ex: Post OP)</label></div>
+      <div class="field"><label>Tarif à la tonne (€ / 1000 kg)</label><input name="price_per_tonne" type="number" step="0.01" min="0" value="${c?.price_per_tonne ?? ""}" placeholder="ex: 150"></div>
       <div style="display:flex;gap:.6rem;justify-content:flex-end">
         <button type="button" class="btn btn-ghost" id="cofCancel">Annuler</button>
         <button type="submit" class="btn btn-primary">${c ? "Enregistrer" : "Créer"}</button>
@@ -784,6 +874,8 @@ function companyForm(c) {
       p_description: f.get("description").trim() || null,
       p_max_members: Math.max(parseInt(f.get("max_members"), 10) || 5, 1),
       p_discord_channel_id: f.get("discord_channel_id").trim() || null,
+      p_is_delivery: f.get("is_delivery") === "on",
+      p_price_per_tonne: f.get("price_per_tonne").trim() === "" ? null : Number(f.get("price_per_tonne")),
     };
     let error;
     if (c) {
@@ -794,6 +886,59 @@ function companyForm(c) {
     if (error) return toast(humanError(error), "err");
     closeModal(); toast(c ? "Entreprise mise à jour" : "Entreprise créée", "ok"); route();
   };
+}
+
+/* ========================================================= LIVRAISONS */
+const DELIVERY_STATUS = {
+  en_attente: { label: "En attente des fournisseurs", cls: "badge-warn" },
+  prete:      { label: "Prête à enlever",              cls: "badge-info" },
+  livree:     { label: "Livrée",                        cls: "badge-ok" },
+  annulee:    { label: "Annulée",                        cls: "badge-danger" },
+};
+
+async function viewDeliveries() {
+  if (!state.activeCompany.is_delivery) {
+    $("#view").innerHTML = empty("⛔", "Cette entreprise n'est pas une entreprise de livraison");
+    return;
+  }
+
+  const { data: groups, error } = await sb.from("delivery_groups")
+    .select("*, delivery_group_orders(order_id, orders(reference, seller_company_id, buyer_company_id))")
+    .eq("delivery_company_id", state.activeCompany.id)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+
+  const sellerIds = [...new Set((groups || []).flatMap(g => (g.delivery_group_orders || []).map(o => o.orders?.seller_company_id)))];
+  const buyerIds = [...new Set((groups || []).map(g => g.buyer_company_id))];
+  const names = await companyNames([...new Set([...sellerIds, ...buyerIds])]);
+
+  $("#view").innerHTML = head("Livraisons", "Regroupements de commandes à livrer") +
+    (groups.length ? groups.map(g => `
+      <div class="card" style="margin-bottom:1rem">
+        <div class="card-pad" style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:center">
+          <div>
+            <b>${esc(names[g.buyer_company_id] || "—")}</b>
+            <span class="badge ${DELIVERY_STATUS[g.status]?.cls || ""}" style="margin-left:.5rem">${DELIVERY_STATUS[g.status]?.label || g.status}</span>
+            <div class="hint">📅 ${g.requested_date ? dateFR(g.requested_date) : "—"} · 🕐 ${esc(g.time_slot || "—")}</div>
+            <div class="hint">Fournisseurs : ${(g.delivery_group_orders || []).map(o => esc(names[o.orders?.seller_company_id] || "—")).join(", ")}</div>
+          </div>
+          <div style="text-align:right">
+            <div class="hint">Poids estimé</div><b>${Number(g.total_weight_kg).toFixed(1)} kg</b>
+            <div class="hint" style="margin-top:.3rem">Tarif</div><b>${money(g.price_ht)}</b>
+          </div>
+        </div>
+        <div class="card-pad" style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap">
+          ${g.status === "prete" ? `<button class="btn btn-sm btn-primary setdelstatus" data-id="${g.id}" data-status="livree">Marquer livrée</button>` : ""}
+          ${g.status !== "livree" && g.status !== "annulee" ? `<button class="btn btn-sm btn-danger setdelstatus" data-id="${g.id}" data-status="annulee">Annuler</button>` : ""}
+        </div>
+      </div>`).join("")
+      : empty("🚚", "Aucune livraison pour le moment", "Elles apparaîtront ici dès qu'un client choisira la livraison groupée."));
+
+  $$(".setdelstatus").forEach(b => b.onclick = async () => {
+    const { error } = await sb.rpc("update_delivery_status", { p_group_id: b.dataset.id, p_status: b.dataset.status });
+    if (error) return toast(humanError(error), "err");
+    toast("Statut mis à jour", "ok"); route();
+  });
 }
 
 async function companyPanel(companyId, companyName) {
