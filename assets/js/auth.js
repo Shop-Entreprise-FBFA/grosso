@@ -6,7 +6,6 @@ else init();
 
 function init() {
   const C = window.CONFIG;
-  $("#brandName").textContent = C.APP_NAME || "Grosso";
   if (C.APP_TAGLINE) document.title = `${C.APP_NAME} — ${C.APP_TAGLINE}`;
 
   const msg = $("#authMsg");
@@ -28,3 +27,4 @@ function init() {
     }
   };
 }
+
