@@ -98,8 +98,11 @@ function setActiveCompany(membership) {
 function renderCompanyBox() {
   const box = $("#whoCompany");
   if (!box) return;
+  const logo = state.activeCompany?.logo_url
+    ? `<img src="${esc(state.activeCompany.logo_url)}" alt="" style="height:22px;border-radius:4px;vertical-align:middle;margin-right:.4rem">`
+    : "";
   if (state.memberships.length > 1) {
-    box.innerHTML = `<select id="companySwitch" style="width:100%;background:#1a2233;color:#fff;border:1px solid #2c3650;border-radius:8px;padding:.35rem .5rem;font-weight:700">
+    box.innerHTML = `<div style="display:flex;align-items:center;margin-bottom:.3rem">${logo}</div><select id="companySwitch" style="width:100%;background:#1a2233;color:#fff;border:1px solid #2c3650;border-radius:8px;padding:.35rem .5rem;font-weight:700">
       ${state.memberships.map((m) => `<option value="${m.companies.id}" ${m.companies.id === state.activeCompany.id ? "selected" : ""}>${esc(m.companies.name)}</option>`).join("")}
     </select>`;
     $("#companySwitch").onchange = (e) => {
@@ -109,7 +112,7 @@ function renderCompanyBox() {
       route();
     };
   } else {
-    box.textContent = state.activeCompany?.name || "Entreprise";
+    box.innerHTML = `${logo}<span>${esc(state.activeCompany?.name || "Entreprise")}</span>`;
   }
   const joinMore = $("#joinMoreBtn");
   if (joinMore) joinMore.hidden = state.memberships.length >= MAX_COMPANIES_PER_USER;
@@ -237,8 +240,11 @@ async function viewHome() {
 
   const names = await companyNames([...new Set(recent.flatMap(o => [o.buyer_company_id, o.seller_company_id]))]);
 
+  const logoImg = state.activeCompany.logo_url
+    ? `<img src="${esc(state.activeCompany.logo_url)}" alt="" style="height:36px;border-radius:6px;vertical-align:middle;margin-right:.6rem">`
+    : "";
   $("#view").innerHTML =
-    head(`Bonjour, ${state.activeCompany.name}`, "Vue d'ensemble de votre activité sur la place de marché") + `
+    `<div class="page-head"><div><h1>${logoImg}Bonjour, ${esc(state.activeCompany.name)}</h1><p>Vue d'ensemble de votre activité sur la place de marché</p></div><div></div></div>` + `
     <div class="grid stats">
       <div class="stat"><div class="label">Mes articles</div><div class="value">${P.length}</div>
         <div class="sub">${P.filter(p => p.is_active).length} en ligne</div></div>
