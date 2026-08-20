@@ -866,6 +866,11 @@ async function viewCompany() {
           <div class="field"><label>Présentation</label><textarea name="description" ${isAdmin ? "" : "disabled"}>${esc(c.description || "")}</textarea></div>
           <div class="field"><label>Logo (URL de l'image)</label><input name="logo_url" type="url" value="${esc(c.logo_url || "")}" ${isAdmin ? "" : "disabled"} placeholder="https://…">
             ${c.logo_url ? `<img src="${esc(c.logo_url)}" alt="" style="height:36px;margin-top:.4rem;border-radius:6px">` : ""}</div>
+          <div class="row">
+            <div class="field"><label>ID salon Discord (notifications)</label><input name="discord_channel_id" value="${esc(c.discord_channel_id || "")}" ${isAdmin ? "" : "disabled"}></div>
+            <div class="field"><label>ID serveur Discord (guild)</label><input name="discord_guild_id" value="${esc(c.discord_guild_id || "")}" ${isAdmin ? "" : "disabled"}></div>
+          </div>
+          <div class="field"><label>ID rôle à ping (facultatif)</label><input name="discord_role_id" value="${esc(c.discord_role_id || "")}" ${isAdmin ? "" : "disabled"}></div>
           ${c.is_delivery ? `<div class="field"><label>Tarif à la tonne (€ / 1000 kg)</label><input name="price_per_tonne" type="number" step="0.01" min="0" value="${c.price_per_tonne ?? ""}" ${isAdmin ? "" : "disabled"}></div>` : ""}
           ${isAdmin
             ? `<button class="btn btn-primary" type="submit">Enregistrer</button>`
@@ -1311,7 +1316,11 @@ function companyForm(c) {
       <div class="field"><label>Présentation</label><textarea name="description">${esc(c?.description || "")}</textarea></div>
       <div class="row">
         <div class="field"><label>Membres max</label><input name="max_members" type="number" min="1" step="1" value="${c?.max_members ?? 5}"></div>
-        <div class="field"><label>ID salon Discord (commandes)</label><input name="discord_channel_id" value="${esc(c?.discord_channel_id || "")}"></div>
+        <div class="field"><label>ID salon Discord (notifications)</label><input name="discord_channel_id" value="${esc(c?.discord_channel_id || "")}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>ID serveur Discord (guild)</label><input name="discord_guild_id" value="${esc(c?.discord_guild_id || "")}"></div>
+        <div class="field"><label>ID rôle à ping (facultatif)</label><input name="discord_role_id" value="${esc(c?.discord_role_id || "")}"></div>
       </div>
       <div class="field"><label style="display:flex;gap:.5rem;align-items:center;font-size:.95rem;color:var(--text)">
         <input type="checkbox" name="is_delivery" style="width:auto" ${c?.is_delivery ? "checked" : ""}> Entreprise de livraison (ex: Post OP)</label></div>
@@ -1340,6 +1349,8 @@ function companyForm(c) {
       p_is_delivery: f.get("is_delivery") === "on",
       p_price_per_tonne: f.get("price_per_tonne").trim() === "" ? null : Number(f.get("price_per_tonne")),
       p_logo_url: f.get("logo_url").trim() || null,
+      p_discord_guild_id: f.get("discord_guild_id").trim() || null,
+      p_discord_role_id: f.get("discord_role_id").trim() || null,
     };
     let error;
     if (c) {
