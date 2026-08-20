@@ -15,7 +15,7 @@ window.CONFIG = {
   SUPABASE_ANON_KEY: "sb_publishable_JURoHIRE-r89bc4dSjfQXw_LhvUCA3Q",
 
   // Personnalisation
-  APP_NAME: "Grosso",
-  APP_TAGLINE: "La place de marché B2B des grossistes",
+  APP_NAME: "Shop Entreprise FBFA",
+  APP_TAGLINE: "La place de marché B2B des entreprises FlashbackFA",
   CURRENCY: "EUR",
 };
