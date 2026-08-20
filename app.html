@@ -10,22 +10,23 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/css/style.css">
 <style>
-  /* Thème clair (additif, activé via body.theme-light) */
-  body.theme-light { background:#f3f5f9; color:#111; }
-  body.theme-light .card, body.theme-light .modal, body.theme-light .setup { background:#fff; color:#111; border:1px solid #e2e6ee; }
-  body.theme-light .hint { color:#667; }
-  body.theme-light table th { color:#556; }
-  body.theme-light input, body.theme-light select, body.theme-light textarea { background:#fff; color:#111; border:1px solid #d5dae3; }
-  /* Responsive mobile */
-  @media (max-width: 760px) {
-    .app { flex-direction: column !important; }
-    .sidebar { width:100% !important; flex-direction:row !important; flex-wrap:wrap; overflow-x:auto; padding:.6rem !important; }
-    .sidebar #nav { display:flex; flex-direction:row; flex-wrap:wrap; gap:.3rem; }
-    .sidebar .who { width:100%; order:99; }
-    .sidebar .spacer { display:none; }
-    .main { padding:1rem !important; }
-    table { display:block; overflow-x:auto; white-space:nowrap; }
-    .grid.stats, .grid.grid-products { grid-template-columns:1fr !important; }
+  body.theme-dark{
+    --bg:#0f1420;
+    --surface:#1a2233;
+    --surface-2:#222c40;
+    --border:#2c3650;
+    --text:#e8ecf5;
+    --muted:#98a2b5;
+    --brand:#3b82f6;
+    --brand-dark:#93c5fd;
+    --brand-soft:#1e2a47;
+    --ok:#34d399;
+    --ok-soft:#113328;
+    --warn:#fbbf24;
+    --warn-soft:#3a2e0e;
+    --danger:#f87171;
+    --danger-soft:#3a1518;
+    --sidebar:#0b111c;
   }
 </style>
 </head>
