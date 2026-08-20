@@ -9,6 +9,25 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/css/style.css">
+<style>
+  /* Thème clair (additif, activé via body.theme-light) */
+  body.theme-light { background:#f3f5f9; color:#111; }
+  body.theme-light .card, body.theme-light .modal, body.theme-light .setup { background:#fff; color:#111; border:1px solid #e2e6ee; }
+  body.theme-light .hint { color:#667; }
+  body.theme-light table th { color:#556; }
+  body.theme-light input, body.theme-light select, body.theme-light textarea { background:#fff; color:#111; border:1px solid #d5dae3; }
+  /* Responsive mobile */
+  @media (max-width: 760px) {
+    .app { flex-direction: column !important; }
+    .sidebar { width:100% !important; flex-direction:row !important; flex-wrap:wrap; overflow-x:auto; padding:.6rem !important; }
+    .sidebar #nav { display:flex; flex-direction:row; flex-wrap:wrap; gap:.3rem; }
+    .sidebar .who { width:100%; order:99; }
+    .sidebar .spacer { display:none; }
+    .main { padding:1rem !important; }
+    table { display:block; overflow-x:auto; white-space:nowrap; }
+    .grid.stats, .grid.grid-products { grid-template-columns:1fr !important; }
+  }
+</style>
 </head>
 <body>
 
@@ -17,6 +36,9 @@
 <div class="app" id="app" hidden>
   <aside class="sidebar">
     <div class="brand" id="brandName"><img src="assets/logo.png" alt="FlashbackFA" style="height:28px;display:block"></div>
+    <form id="globalSearchForm" style="padding:0 1rem;margin-bottom:.5rem">
+      <input id="globalSearch" type="search" placeholder="🔍 Rechercher…" style="width:100%;padding:.4rem .6rem;border-radius:8px;border:1px solid #2c3650;background:#1a2233;color:#fff">
+    </form>
     <nav id="nav">
       <a href="#accueil"            data-view="accueil" class="nav-co">📊 <span>Tableau de bord</span></a>
       <a href="#catalogue"          data-view="catalogue" class="nav-co">🌐 <span>Catalogue général</span></a>
@@ -26,7 +48,10 @@
       <a href="#ventes"             data-view="ventes" class="nav-co">📤 <span>Commandes reçues</span></a>
       <a href="#entreprise"         data-view="entreprise" class="nav-co">🏢 <span>Mon entreprise</span></a>
       <a href="#stats"              data-view="stats" class="nav-co">📊 <span>Statistiques</span></a>
+      <a href="#devis"              data-view="devis" class="nav-co">📋 <span>Devis</span></a>
+      <a href="#actualites"         data-view="actualites">📰 <span>Actualités</span></a>
       <a href="#livraisons"         data-view="livraisons" id="navDeliveries" class="nav-co" hidden>🚚 <span>Livraisons</span></a>
+      <a href="#journal"            data-view="journal" id="navAuditLog" hidden>🗒️ <span>Journal staff</span></a>
       <a href="#staff"              data-view="staff" id="navStaff" hidden>🛡️ <span>Console staff</span></a>
     </nav>
     <div class="spacer"></div>
@@ -34,6 +59,7 @@
       <div id="whoCompany">—</div>
       <span id="whoEmail"></span>
       <button class="btn btn-sm btn-ghost" id="joinMoreBtn" style="margin-top:.6rem;width:100%;color:#cfd6e4">+ Rejoindre une entreprise</button>
+      <button class="btn btn-sm btn-ghost" id="themeToggle" style="margin-top:.4rem;width:100%;color:#cfd6e4">🌙 Mode clair</button>
       <button class="btn btn-sm btn-ghost" id="logout" style="margin-top:.4rem;width:100%;color:#cfd6e4">Se déconnecter</button>
     </div>
   </aside>
