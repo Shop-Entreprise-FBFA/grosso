@@ -57,12 +57,12 @@ const state = { user: null, profile: null, memberships: [], activeCompany: null,
   $("#modalBg").onclick = (e) => { if (e.target.id === "modalBg") closeModal(); };
   $("#joinMoreBtn").onclick = openJoinMoreModal;
 
-  const savedTheme = localStorage.getItem("grosso_theme") || "dark";
-  if (savedTheme === "light") { document.body.classList.add("theme-light"); $("#themeToggle").textContent = "☀️ Mode sombre"; }
+  const savedTheme = localStorage.getItem("grosso_theme") || "light";
+  if (savedTheme === "dark") { document.body.classList.add("theme-dark"); $("#themeToggle").textContent = "☀️ Mode clair"; }
   $("#themeToggle").onclick = () => {
-    const light = document.body.classList.toggle("theme-light");
-    localStorage.setItem("grosso_theme", light ? "light" : "dark");
-    $("#themeToggle").textContent = light ? "☀️ Mode sombre" : "🌙 Mode clair";
+    const dark = document.body.classList.toggle("theme-dark");
+    localStorage.setItem("grosso_theme", dark ? "dark" : "light");
+    $("#themeToggle").textContent = dark ? "☀️ Mode clair" : "🌙 Mode sombre";
   };
   $("#globalSearchForm").onsubmit = (e) => {
     e.preventDefault();
