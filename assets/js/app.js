@@ -8,6 +8,7 @@ if (!configOK) { showSetupScreen(); throw new Error("config"); }
 const STATUS = {
   en_attente: { label: "En attente", cls: "badge-warn" },
   confirmee:  { label: "Confirmée",  cls: "badge-info" },
+  attente_paiement: { label: "En attente de paiement", cls: "badge-warn" },
   expediee:   { label: "Expédiée",   cls: "badge-info" },
   livree:     { label: "Livrée",     cls: "badge-ok" },
   annulee:    { label: "Annulée",    cls: "badge-danger" },
@@ -56,7 +57,20 @@ const state = { user: null, profile: null, memberships: [], activeCompany: null,
   $("#modalBg").onclick = (e) => { if (e.target.id === "modalBg") closeModal(); };
   $("#joinMoreBtn").onclick = openJoinMoreModal;
 
-  if (profile.is_staff) $("#navStaff").hidden = false;
+  const savedTheme = localStorage.getItem("grosso_theme") || "dark";
+  if (savedTheme === "light") { document.body.classList.add("theme-light"); $("#themeToggle").textContent = "☀️ Mode sombre"; }
+  $("#themeToggle").onclick = () => {
+    const light = document.body.classList.toggle("theme-light");
+    localStorage.setItem("grosso_theme", light ? "light" : "dark");
+    $("#themeToggle").textContent = light ? "☀️ Mode sombre" : "🌙 Mode clair";
+  };
+  $("#globalSearchForm").onsubmit = (e) => {
+    e.preventDefault();
+    searchQuery = $("#globalSearch").value.trim();
+    location.hash = "#recherche"; route();
+  };
+
+  if (profile.is_staff) { $("#navStaff").hidden = false; $("#navAuditLog").hidden = false; }
 
   if (!state.memberships.length) {
     if (profile.is_staff) {
@@ -201,9 +215,14 @@ const VIEWS = {
   ventes: viewSales,
   entreprise: viewCompany,
   stats: viewStats,
+  devis: viewDevis,
+  actualites: viewAnnouncements,
+  journal: viewAuditLog,
+  recherche: viewSearch,
   staff: viewStaff,
   livraisons: viewDeliveries,
 };
+let searchQuery = "";
 
 async function route() {
   const name = (location.hash.replace("#", "") || (state.activeCompany ? "accueil" : "staff"));
@@ -300,6 +319,9 @@ async function viewCatalog() {
   if (error) throw error;
   catalogCache = data || [];
 
+  const { data: favs } = await sb.from("company_favorites").select("seller_company_id").eq("buyer_company_id", state.activeCompany.id);
+  const favSet = new Set((favs || []).map(f => f.seller_company_id));
+
   const cats = [...new Set(catalogCache.map((p) => p.category).filter(Boolean))].sort();
   const cos  = [...new Map(catalogCache.map((p) => [p.company_id, p.company_name])).entries()]
                  .sort((a, b) => a[1].localeCompare(b[1]));
@@ -311,20 +333,22 @@ async function viewCatalog() {
       <select id="fCat"><option value="">Toutes les catégories</option>${cats.map(c => `<option>${esc(c)}</option>`).join("")}</select>
       <select id="fCo"><option value="">Toutes les entreprises</option>${cos.map(([id, n]) => `<option value="${id}">${esc(n)}</option>`).join("")}</select>
       <select id="fSort"><option value="recent">Plus récents</option><option value="price">Prix croissant</option><option value="name">Nom A→Z</option></select>
+      <label style="display:flex;align-items:center;gap:.3rem;white-space:nowrap"><input type="checkbox" id="fFav" style="width:auto">⭐ Favoris uniquement</label>
     </div>
     <div id="catalogGrid" class="grid grid-products"></div>`;
 
   const render = () => {
     const q  = $("#fSearch").value.trim().toLowerCase();
-    const c  = $("#fCat").value, co = $("#fCo").value, s = $("#fSort").value;
+    const c  = $("#fCat").value, co = $("#fCo").value, s = $("#fSort").value, favOnly = $("#fFav").checked;
     let list = catalogCache.filter((p) =>
       (!c || p.category === c) && (!co || p.company_id === co) &&
+      (!favOnly || favSet.has(p.company_id)) &&
       (!q || [p.name, p.sku, p.description, p.company_name].join(" ").toLowerCase().includes(q)));
     if (s === "price") list.sort((a, b) => a.price_ht - b.price_ht);
     if (s === "name")  list.sort((a, b) => a.name.localeCompare(b.name));
 
     $("#catalogGrid").innerHTML = list.length
-      ? list.map(productCard).join("")
+      ? list.map(p => productCard(p, favSet)).join("")
       : empty("🔍", "Aucun article ne correspond", "Essayez d'élargir votre recherche.");
 
     $$("#catalogGrid .add").forEach((btn) => {
@@ -334,22 +358,70 @@ async function viewCatalog() {
         addToCart(p, Math.max(parseInt(input.value, 10) || p.min_qty, p.min_qty));
       };
     });
+    $$("#catalogGrid .fav").forEach((btn) => {
+      btn.onclick = async () => {
+        const sellerId = btn.dataset.seller;
+        if (favSet.has(sellerId)) {
+          await sb.from("company_favorites").delete().eq("buyer_company_id", state.activeCompany.id).eq("seller_company_id", sellerId);
+          favSet.delete(sellerId);
+        } else {
+          await sb.from("company_favorites").insert({ buyer_company_id: state.activeCompany.id, seller_company_id: sellerId });
+          favSet.add(sellerId);
+        }
+        render();
+      };
+    });
+    $$("#catalogGrid .quote").forEach((btn) => {
+      btn.onclick = () => {
+        const p = catalogCache.find((x) => x.id === btn.dataset.id);
+        quoteForm(p);
+      };
+    });
   };
-  ["fSearch", "fCat", "fCo", "fSort"].forEach((id) => { $("#" + id).oninput = render; });
+  ["fSearch", "fCat", "fCo", "fSort", "fFav"].forEach((id) => { $("#" + id).oninput = render; });
   render();
 }
 
-const productCard = (p) => {
+function quoteForm(p) {
+  openModal("Demander un devis", `
+    <form id="qf">
+      <p class="hint">Article : <b>${esc(p.name)}</b> — ${esc(p.company_name)}</p>
+      <div class="field"><label>Quantité souhaitée</label><input name="quantity" type="number" min="1" step="1" value="${p.min_qty}"></div>
+      <div class="field"><label>Message pour le fournisseur</label><textarea name="message" placeholder="Précisez votre besoin, délai, etc."></textarea></div>
+      <div style="display:flex;gap:.6rem;justify-content:flex-end">
+        <button type="button" class="btn btn-ghost" id="qfCancel">Annuler</button>
+        <button type="submit" class="btn btn-primary">Envoyer la demande</button>
+      </div>
+    </form>`);
+  $("#qfCancel").onclick = closeModal;
+  $("#qf").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const items = [{ product_id: p.id, product_name: p.name, quantity: parseInt(f.get("quantity"), 10) || 1 }];
+    const { error } = await sb.rpc("request_quote", {
+      p_buyer: state.activeCompany.id, p_seller: p.company_id, p_items: items, p_message: f.get("message").trim() || null,
+    });
+    if (error) return toast(humanError(error), "err");
+    closeModal(); toast("Demande de devis envoyée", "ok");
+  };
+}
+
+const productCard = (p, favSet) => {
   const hasDiscount = p.discount_percent > 0;
   const effPrice = hasDiscount ? p.price_ht * (1 - p.discount_percent / 100) : p.price_ht;
   const stockBadge = p.stock <= 0
     ? `<span class="badge badge-danger">Rupture — précommande possible</span>`
     : (p.stock <= (p.low_stock_threshold ?? 5) ? `<span class="badge badge-warn">Stock faible</span>` : "");
+  const isNew = (Date.now() - new Date(p.created_at).getTime()) < 7 * 24 * 3600 * 1000;
+  const isFav = favSet && favSet.has(p.company_id);
   return `
   <article class="card product">
-    <div class="thumb">${p.image_url ? `<img src="${esc(p.image_url)}" alt="" loading="lazy">` : "📦"}</div>
+    <div class="thumb">${p.image_url ? `<img src="${esc(p.image_url)}" alt="" loading="lazy">` : "📦"}${isNew ? `<span class="badge badge-ok" style="position:absolute;top:.5rem;left:.5rem">🆕 Nouveau</span>` : ""}</div>
     <div class="body">
-      <div class="seller">${p.company_logo_url ? `<img src="${esc(p.company_logo_url)}" alt="" style="height:16px;vertical-align:middle;border-radius:3px;margin-right:.3rem">` : ""}${esc(p.company_name)}${p.company_city ? " · " + esc(p.company_city) : ""}</div>
+      <div class="seller" style="display:flex;align-items:center;justify-content:space-between">
+        <span>${p.company_logo_url ? `<img src="${esc(p.company_logo_url)}" alt="" style="height:16px;vertical-align:middle;border-radius:3px;margin-right:.3rem">` : ""}${esc(p.company_name)}${p.company_city ? " · " + esc(p.company_city) : ""}</span>
+        <button class="fav" data-seller="${p.company_id}" title="Favori" style="background:none;border:none;cursor:pointer;font-size:1.1rem">${isFav ? "⭐" : "☆"}</button>
+      </div>
       <div class="name">${esc(p.name)}</div>
       <div class="hint">${p.category ? esc(p.category) + " · " : ""}${p.stock > 0 ? p.stock + " en stock" : "stock à confirmer"}</div>
       ${stockBadge}
@@ -364,6 +436,7 @@ const productCard = (p) => {
         <input class="qty" type="number" min="${p.min_qty}" step="1" value="${p.min_qty}" aria-label="Quantité">
         <button class="btn btn-primary btn-sm add" data-id="${p.id}" style="flex:1">Ajouter</button>
       </div>
+      <button class="btn btn-ghost btn-sm quote" data-id="${p.id}" style="width:100%;margin-top:.4rem">Demander un devis</button>
     </div>
   </article>`;
 };
@@ -757,7 +830,8 @@ function statusButtons(o, sens) {
   if (sens === "vente") {
     return [
       o.status === "en_attente" ? B("confirmee", "Confirmer", "btn-primary") : "",
-      o.status === "confirmee"  ? B("expediee", "Marquer expédiée", "btn-primary") : "",
+      o.status === "confirmee"  ? B("attente_paiement", "Marquer en attente de paiement", "btn-primary") : "",
+      o.status === "attente_paiement" ? B("expediee", "Marquer expédiée", "btn-primary") : "",
       o.status === "expediee"   ? B("livree", "Marquer livrée", "btn-primary") : "",
       B("annulee", "Refuser", "btn-danger"),
     ].join("");
@@ -935,6 +1009,203 @@ async function viewStats() {
         </tbody></table>` : `<div class="card-pad"><p class="hint">Aucune vente pour l'instant.</p></div>`}
       </div>
     </div>`;
+}
+
+/* ============================================================== DEVIS */
+async function viewDevis() {
+  const cid = state.activeCompany.id;
+  const { data, error } = await sb.from("quotes")
+    .select("*")
+    .or(`buyer_company_id.eq.${cid},seller_company_id.eq.${cid}`)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+
+  const names = await companyNames([...new Set(data.flatMap(q => [q.buyer_company_id, q.seller_company_id]))]);
+  const QSTATUS = {
+    en_attente: { label: "En attente de réponse", cls: "badge-warn" },
+    repondu:    { label: "Réponse reçue", cls: "badge-info" },
+    accepte:    { label: "Accepté", cls: "badge-ok" },
+    refuse:     { label: "Refusé", cls: "badge-danger" },
+  };
+
+  $("#view").innerHTML = head("Devis", "Demandes de prix envoyées et reçues") +
+    (data.length ? data.map(q => {
+      const sens = q.buyer_company_id === cid ? "achat" : "vente";
+      const other = sens === "achat" ? q.seller_company_id : q.buyer_company_id;
+      return `<div class="card" style="margin-bottom:1rem">
+        <div class="card-pad">
+          <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem;align-items:center">
+            <div>
+              <b>${sens === "achat" ? "📥 Demande envoyée à" : "📤 Demande reçue de"} ${esc(names[other] || "—")}</b>
+              <span class="badge ${QSTATUS[q.status]?.cls || ""}" style="margin-left:.5rem">${QSTATUS[q.status]?.label || q.status}</span>
+              <div class="hint">${dateFR(q.created_at)}</div>
+            </div>
+          </div>
+          <div class="hint" style="margin-top:.5rem">Articles : ${(q.items || []).map(i => `${esc(i.product_name)} × ${i.quantity}`).join(", ")}</div>
+          ${q.message ? `<div class="hint">📝 ${esc(q.message)}</div>` : ""}
+          ${q.proposed_price != null ? `<div style="margin-top:.5rem">💰 Prix proposé : <b>${money(q.proposed_price)}</b></div>` : ""}
+          ${q.seller_message ? `<div class="hint">💬 ${esc(q.seller_message)}</div>` : ""}
+          <div style="display:flex;gap:.5rem;margin-top:.6rem;flex-wrap:wrap">
+            ${sens === "vente" && q.status === "en_attente" ? `<button class="btn btn-sm btn-primary respond" data-id="${q.id}">Répondre</button>` : ""}
+            ${sens === "achat" && q.status === "repondu" ? `
+              <button class="btn btn-sm btn-primary accept" data-id="${q.id}">Accepter</button>
+              <button class="btn btn-sm btn-danger refuse" data-id="${q.id}">Refuser</button>` : ""}
+          </div>
+        </div>
+      </div>`;
+    }).join("") : empty("📋", "Aucun devis", "Demandez un devis depuis le catalogue général pour lancer une négociation."));
+
+  $$(".respond").forEach(b => b.onclick = () => {
+    openModal("Répondre au devis", `
+      <form id="rf">
+        <div class="field"><label>Prix proposé (€ HT) *</label><input name="price" type="number" step="0.01" min="0" required></div>
+        <div class="field"><label>Message</label><textarea name="message" placeholder="Conditions, délai, remarques…"></textarea></div>
+        <div style="display:flex;gap:.6rem;justify-content:flex-end">
+          <button type="button" class="btn btn-ghost" id="rfCancel">Annuler</button>
+          <button type="submit" class="btn btn-primary">Envoyer</button>
+        </div>
+      </form>`);
+    $("#rfCancel").onclick = closeModal;
+    $("#rf").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const { error } = await sb.rpc("respond_quote", { p_quote_id: b.dataset.id, p_proposed_price: Number(f.get("price")), p_seller_message: f.get("message").trim() || null });
+      if (error) return toast(humanError(error), "err");
+      closeModal(); toast("Réponse envoyée", "ok"); route();
+    };
+  });
+  $$(".accept").forEach(b => b.onclick = async () => {
+    const { error } = await sb.rpc("set_quote_status", { p_quote_id: b.dataset.id, p_status: "accepte" });
+    if (error) return toast(humanError(error), "err");
+    toast("Devis accepté", "ok"); route();
+  });
+  $$(".refuse").forEach(b => b.onclick = async () => {
+    const { error } = await sb.rpc("set_quote_status", { p_quote_id: b.dataset.id, p_status: "refuse" });
+    if (error) return toast(humanError(error), "err");
+    toast("Devis refusé", "ok"); route();
+  });
+}
+
+/* ========================================================= ACTUALITÉS */
+async function viewAnnouncements() {
+  const { data, error } = await sb.from("announcements").select("*").order("created_at", { ascending: false }).limit(50);
+  if (error) throw error;
+
+  const cids = [...new Set(data.map(a => a.company_id).filter(Boolean))];
+  const names = await companyNames(cids);
+
+  const canPublishCompany = state.activeCompany && state.activeRole === "admin";
+  const canPublishPlatform = state.profile.is_staff;
+
+  $("#view").innerHTML = head("Actualités", "Ce qu'il se passe sur la place de marché",
+    `${canPublishPlatform ? `<button class="btn btn-primary" id="btnNewsPlatform">+ Actualité plateforme</button>` : ""}
+     ${canPublishCompany ? `<button class="btn btn-ghost" id="btnNewsCompany">+ Actualité de mon entreprise</button>` : ""}`) +
+    (data.length ? data.map(a => `
+      <div class="card" style="margin-bottom:1rem">
+        <div class="card-pad">
+          <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:start">
+            <div>
+              <b>${a.company_id ? "🏢 " + esc(names[a.company_id] || "Entreprise") : "📢 Plateforme"}</b>
+              <div class="hint">${dateFR(a.created_at)}</div>
+            </div>
+            ${(state.profile.is_staff || (a.company_id && state.activeCompany?.id === a.company_id && state.activeRole === "admin")) ? `<button class="btn btn-sm btn-danger delAnn" data-id="${a.id}">Suppr.</button>` : ""}
+          </div>
+          <h3 style="margin:.4rem 0">${esc(a.title)}</h3>
+          ${a.body ? `<p>${esc(a.body)}</p>` : ""}
+        </div>
+      </div>`).join("") : empty("📰", "Aucune actualité pour le moment"));
+
+  if (canPublishPlatform) $("#btnNewsPlatform").onclick = () => announcementForm(null);
+  if (canPublishCompany) $("#btnNewsCompany").onclick = () => announcementForm(state.activeCompany.id);
+  $$(".delAnn").forEach(b => b.onclick = async () => {
+    if (!confirm("Supprimer cette actualité ?")) return;
+    const { error } = await sb.rpc("delete_announcement", { p_id: b.dataset.id });
+    if (error) return toast(humanError(error), "err");
+    toast("Actualité supprimée", "ok"); route();
+  });
+}
+
+function announcementForm(companyId) {
+  openModal(companyId ? "Actualité de mon entreprise" : "Actualité plateforme", `
+    <form id="af">
+      <div class="field"><label>Titre *</label><input name="title" required></div>
+      <div class="field"><label>Message</label><textarea name="body"></textarea></div>
+      <div style="display:flex;gap:.6rem;justify-content:flex-end">
+        <button type="button" class="btn btn-ghost" id="afCancel">Annuler</button>
+        <button type="submit" class="btn btn-primary">Publier</button>
+      </div>
+    </form>`);
+  $("#afCancel").onclick = closeModal;
+  $("#af").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const { error } = await sb.rpc("create_announcement", { p_title: f.get("title").trim(), p_body: f.get("body").trim() || null, p_company_id: companyId });
+    if (error) return toast(humanError(error), "err");
+    closeModal(); toast("Actualité publiée", "ok"); route();
+  };
+}
+
+/* ======================================================= JOURNAL STAFF */
+async function viewAuditLog() {
+  if (!state.profile.is_staff) { $("#view").innerHTML = empty("⛔", "Accès réservé au staff"); return; }
+  const { data, error } = await sb.from("admin_audit_log").select("*").order("created_at", { ascending: false }).limit(100);
+  if (error) throw error;
+
+  const actorIds = [...new Set(data.map(l => l.actor_id).filter(Boolean))];
+  let actorNames = {};
+  if (actorIds.length) {
+    const { data: profs } = await sb.from("profiles").select("id, full_name, discord_username").in("id", actorIds);
+    actorNames = Object.fromEntries((profs || []).map(p => [p.id, p.full_name || p.discord_username || p.id]));
+  }
+
+  const ACTION_LABELS = {
+    create_company: "Création entreprise", update_company: "Modification entreprise", delete_company: "Suppression entreprise",
+    activate_company: "Activation entreprise", deactivate_company: "Désactivation entreprise",
+    attach_profile: "Rattachement membre", remove_member: "Retrait accès membre",
+    delete_order: "Suppression commande", grant_staff: "Attribution staff", revoke_staff: "Retrait staff",
+  };
+
+  $("#view").innerHTML = head("Journal d'activité staff", "Historique des actions de modération (100 dernières)") +
+    (data.length ? `<div class="card"><table><thead><tr><th>Quand</th><th>Qui</th><th>Action</th><th>Détails</th></tr></thead><tbody>
+      ${data.map(l => `<tr>
+        <td class="hint">${dateFR(l.created_at)}</td>
+        <td>${esc(actorNames[l.actor_id] || "—")}</td>
+        <td>${esc(ACTION_LABELS[l.action] || l.action)}</td>
+        <td class="hint">${esc(JSON.stringify(l.details || {}))}</td>
+      </tr>`).join("")}
+    </tbody></table></div>` : empty("🗒️", "Aucune action enregistrée pour l'instant"));
+}
+
+/* ========================================================== RECHERCHE */
+async function viewSearch() {
+  const q = searchQuery.trim();
+  if (!q) { $("#view").innerHTML = empty("🔍", "Tapez une recherche dans la barre latérale"); return; }
+
+  const [{ data: products }, { data: companies }] = await Promise.all([
+    sb.from("catalog").select("*").eq("is_active", true).neq("company_id", state.activeCompany?.id || "")
+      .or(`name.ilike.%${q}%,sku.ilike.%${q}%,category.ilike.%${q}%`).limit(30),
+    sb.from("companies").select("*").ilike("name", `%${q}%`).eq("is_active", true).limit(20),
+  ]);
+
+  $("#view").innerHTML = head("Résultats de recherche", `Pour « ${q} »`) +
+    `<h3>🏢 Entreprises (${companies?.length || 0})</h3>` +
+    (companies && companies.length ? `<div class="card" style="margin-bottom:1.2rem"><table><thead><tr><th>Nom</th><th>Ville</th><th>Secteur</th></tr></thead><tbody>
+      ${companies.map(c => `<tr><td>${c.logo_url ? `<img src="${esc(c.logo_url)}" alt="" style="height:16px;vertical-align:middle;border-radius:3px;margin-right:.3rem">` : ""}${esc(c.name)}</td><td>${esc(c.city || "—")}</td><td>${esc(c.sector || "—")}</td></tr>`).join("")}
+    </tbody></table></div>` : `<p class="hint" style="margin-bottom:1.2rem">Aucune entreprise trouvée.</p>`) +
+    `<h3>📦 Articles (${products?.length || 0})</h3>` +
+    `<div class="grid grid-products">${products && products.length ? products.map(p => productCard(p)).join("") : ""}</div>` +
+    (!products || !products.length ? `<p class="hint">Aucun article trouvé.</p>` : "");
+
+  $$(".grid-products .add").forEach((btn) => {
+    btn.onclick = () => {
+      const p = products.find((x) => x.id === btn.dataset.id);
+      const input = btn.parentElement.querySelector("input");
+      addToCart(p, Math.max(parseInt(input.value, 10) || p.min_qty, p.min_qty));
+    };
+  });
+  $$(".grid-products .quote").forEach((btn) => {
+    btn.onclick = () => quoteForm(products.find((x) => x.id === btn.dataset.id));
+  });
 }
 
 /* ============================================================= STAFF */
