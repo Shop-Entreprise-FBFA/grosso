@@ -1,5 +1,5 @@
 /* =====================================================================
-   Grosso — application (espace entreprise)
+   Grosso — application (espace entreprise) — V4 multi-entreprises
    ===================================================================== */
 import { sb, configOK, $, $$, money, dateFR, esc, toast, humanError, showSetupScreen } from "./common.js";
 
@@ -13,8 +13,9 @@ const STATUS = {
   annulee:    { label: "Annulée",    cls: "badge-danger" },
 };
 const UNITS = ["unité", "carton", "palette", "kg", "litre", "lot"];
+const MAX_COMPANIES_PER_USER = 3;
 
-const state = { user: null, profile: null, company: null, cart: [] };
+const state = { user: null, profile: null, memberships: [], activeCompany: null, activeRole: null, cart: [] };
 
 /* ---------------------------------------------------------------- boot */
 (async function boot() {
@@ -22,25 +23,27 @@ const state = { user: null, profile: null, company: null, cart: [] };
   if (!session) { location.replace("index.html"); return; }
   state.user = session.user;
 
-  const { data: profile, error } = await sb
-    .from("profiles")
-    .select("*, companies(*)")
-    .eq("id", state.user.id)
-    .single();
+  const { data: profile, error } = await sb.from("profiles").select("*").eq("id", state.user.id).single();
 
   if (error || !profile) {
     document.body.innerHTML = `<div class="center-screen"><div class="setup card card-pad">
       <h1>Profil introuvable</h1>
       <p>Votre compte Discord est bien connecté, mais aucun profil n'a été créé côté base de données.
-      Vérifiez que <code>supabase/migration_discord.sql</code> a bien été exécuté, puis reconnectez-vous.</p>
+      Vérifiez que les migrations SQL ont bien été exécutées, puis reconnectez-vous.</p>
       <button class="btn btn-primary" onclick="location.href='index.html'">Retour</button>
     </div></div>`;
     await sb.auth.signOut();
     return;
   }
-
   state.profile = profile;
-  state.company = profile.companies || null;
+
+  const { data: memberships, error: e2 } = await sb
+    .from("company_members")
+    .select("role, created_at, companies(*)")
+    .eq("profile_id", state.user.id);
+  if (e2) throw e2;
+  state.memberships = memberships || [];
+
   loadCart();
 
   $("#brandName").textContent = window.CONFIG.APP_NAME || "Grosso";
@@ -52,12 +55,12 @@ const state = { user: null, profile: null, company: null, cart: [] };
   $("#logout").onclick = async () => { await sb.auth.signOut(); location.replace("index.html"); };
   $("#modalClose").onclick = closeModal;
   $("#modalBg").onclick = (e) => { if (e.target.id === "modalBg") closeModal(); };
+  $("#joinMoreBtn").onclick = openJoinMoreModal;
 
   if (profile.is_staff) $("#navStaff").hidden = false;
 
-  if (!state.company) {
+  if (!state.memberships.length) {
     if (profile.is_staff) {
-      // Staff sans entreprise : accès direct à la console, nav entreprise masquée
       $$(".nav-co").forEach((a) => (a.hidden = true));
       $("#whoCompany").textContent = "Staff";
       $("#boot").hidden = true;
@@ -71,7 +74,10 @@ const state = { user: null, profile: null, company: null, cart: [] };
     return;
   }
 
-  $("#whoCompany").textContent = state.company?.name || "Entreprise";
+  const savedId = localStorage.getItem("grosso_active_company_" + state.user.id);
+  const found = state.memberships.find((m) => m.companies.id === savedId);
+  setActiveCompany(found || state.memberships[0]);
+
   $("#boot").hidden = true;
   $("#app").hidden = false;
 
@@ -80,11 +86,55 @@ const state = { user: null, profile: null, company: null, cart: [] };
   route();
 })();
 
+/* ------------------------------------------------- sélecteur entreprise */
+function setActiveCompany(membership) {
+  state.activeCompany = membership.companies;
+  state.activeRole = membership.role;
+  localStorage.setItem("grosso_active_company_" + state.user.id, membership.companies.id);
+  renderCompanyBox();
+}
+
+function renderCompanyBox() {
+  const box = $("#whoCompany");
+  if (!box) return;
+  if (state.memberships.length > 1) {
+    box.innerHTML = `<select id="companySwitch" style="width:100%;background:#1a2233;color:#fff;border:1px solid #2c3650;border-radius:8px;padding:.35rem .5rem;font-weight:700">
+      ${state.memberships.map((m) => `<option value="${m.companies.id}" ${m.companies.id === state.activeCompany.id ? "selected" : ""}>${esc(m.companies.name)}</option>`).join("")}
+    </select>`;
+    $("#companySwitch").onchange = (e) => {
+      const m = state.memberships.find((x) => x.companies.id === e.target.value);
+      setActiveCompany(m);
+      location.hash = "#accueil";
+      route();
+    };
+  } else {
+    box.textContent = state.activeCompany?.name || "Entreprise";
+  }
+  const joinMore = $("#joinMoreBtn");
+  if (joinMore) joinMore.hidden = state.memberships.length >= MAX_COMPANIES_PER_USER;
+}
+
+function openJoinMoreModal() {
+  openModal("Rejoindre une autre entreprise", `
+    <form id="joinMoreForm">
+      <p class="hint">Vous êtes membre de ${state.memberships.length}/${MAX_COMPANIES_PER_USER} entreprises.</p>
+      <div class="field"><label>Code d'invitation</label><input id="joinMoreCode" required placeholder="4C7K-R2AB" style="text-transform:uppercase;font-family:monospace"></div>
+      <button class="btn btn-primary btn-block" type="submit">Rejoindre</button>
+    </form>`);
+  $("#joinMoreForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const code = $("#joinMoreCode").value.trim().toUpperCase();
+    const { error } = await sb.rpc("join_company", { p_code: code });
+    if (error) return toast(humanError(error), "err");
+    closeModal(); toast("Entreprise rejointe", "ok"); location.reload();
+  };
+}
+
 /* --------------------------------------------------- écran "rejoindre" */
 function renderJoinScreen() {
   document.body.innerHTML = `<div class="center-screen"><div class="setup card card-pad" style="max-width:480px">
-    <h1>Rejoindre votre entreprise</h1>
-    <p class="hint">Votre compte Discord est connecté. Entrez le code d'invitation transmis par votre entreprise pour accéder à votre espace (5 membres maximum par entreprise).</p>
+    <h1>Rejoindre une entreprise</h1>
+    <p class="hint">Votre compte Discord est connecté. Entrez le code d'invitation transmis par votre entreprise pour accéder à votre espace (5 membres maximum par entreprise, ${MAX_COMPANIES_PER_USER} entreprises maximum par personne).</p>
     <form id="joinForm">
       <div class="field"><label>Code d'invitation</label><input id="joinCode" required placeholder="4C7K-R2AB" style="text-transform:uppercase;font-family:monospace"></div>
       <button class="btn btn-primary btn-block" type="submit">Rejoindre</button>
@@ -147,7 +197,7 @@ const VIEWS = {
 };
 
 async function route() {
-  const name = (location.hash.replace("#", "") || (state.company ? "accueil" : "staff"));
+  const name = (location.hash.replace("#", "") || (state.activeCompany ? "accueil" : "staff"));
   const fn = VIEWS[name] || viewHome;
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === name));
   $("#view").innerHTML = `<p class="hint">Chargement…</p>`;
@@ -163,7 +213,7 @@ const empty = (icon, text, sub = "") =>
 
 /* ============================================================ ACCUEIL */
 async function viewHome() {
-  const cid = state.company.id;
+  const cid = state.activeCompany.id;
   const [prods, asSeller, asBuyer, companies] = await Promise.all([
     sb.from("products").select("id,is_active,stock").eq("company_id", cid),
     sb.from("orders").select("*").eq("seller_company_id", cid).order("created_at", { ascending: false }),
@@ -182,7 +232,7 @@ async function viewHome() {
   const names = await companyNames([...new Set(recent.flatMap(o => [o.buyer_company_id, o.seller_company_id]))]);
 
   $("#view").innerHTML =
-    head(`Bonjour, ${state.company.name}`, "Vue d'ensemble de votre activité sur la place de marché") + `
+    head(`Bonjour, ${state.activeCompany.name}`, "Vue d'ensemble de votre activité sur la place de marché") + `
     <div class="grid stats">
       <div class="stat"><div class="label">Mes articles</div><div class="value">${P.length}</div>
         <div class="sub">${P.filter(p => p.is_active).length} en ligne</div></div>
@@ -233,7 +283,7 @@ async function viewCatalog() {
     .from("catalog")
     .select("*")
     .eq("is_active", true)
-    .neq("company_id", state.company.id)
+    .neq("company_id", state.activeCompany.id)
     .order("created_at", { ascending: false });
   if (error) throw error;
   catalogCache = data || [];
@@ -296,7 +346,7 @@ const productCard = (p) => `
 /* ======================================================= MES ARTICLES */
 async function viewMyProducts() {
   const { data, error } = await sb.from("products").select("*")
-    .eq("company_id", state.company.id).order("created_at", { ascending: false });
+    .eq("company_id", state.activeCompany.id).order("created_at", { ascending: false });
   if (error) throw error;
 
   $("#view").innerHTML =
@@ -358,7 +408,7 @@ function productForm(p) {
     e.preventDefault();
     const f = new FormData(e.target);
     const payload = {
-      company_id: state.company.id,
+      company_id: state.activeCompany.id,
       name: f.get("name").trim(),
       sku: f.get("sku").trim() || null,
       category: f.get("category").trim() || null,
@@ -388,7 +438,7 @@ async function viewCart() {
   }
   const sellers = [...new Map(state.cart.map(i => [i.seller_id, i.seller_name])).entries()];
 
-  $("#view").innerHTML = head("Panier", "Une commande distincte est créée pour chaque fournisseur") +
+  $("#view").innerHTML = head("Panier", `Commande passée au nom de : ${esc(state.activeCompany.name)}`) +
     sellers.map(([sid, sname]) => {
       const lines = state.cart.filter(i => i.seller_id === sid);
       const total = lines.reduce((s, i) => s + i.price * i.qty, 0);
@@ -429,7 +479,7 @@ async function viewCart() {
     const items = state.cart.filter(i => i.seller_id === sid)
       .map(i => ({ product_id: i.product_id, quantity: i.qty }));
     const note = $(`.note[data-sid="${sid}"]`)?.value.trim() || null;
-    const { error } = await sb.rpc("place_order", { p_seller: sid, p_items: items, p_note: note });
+    const { error } = await sb.rpc("place_order", { p_buyer: state.activeCompany.id, p_seller: sid, p_items: items, p_note: note });
     if (error) { b.disabled = false; b.textContent = "Passer commande"; return toast(humanError(error), "err"); }
     state.cart = state.cart.filter(i => i.seller_id !== sid); saveCart();
     toast("Commande envoyée au fournisseur", "ok");
@@ -446,7 +496,7 @@ async function ordersView(sens) {
   const other = sens === "achat" ? "seller_company_id" : "buyer_company_id";
 
   const { data, error } = await sb.from("orders")
-    .select("*, order_items(*)").eq(col, state.company.id)
+    .select("*, order_items(*)").eq(col, state.activeCompany.id)
     .order("created_at", { ascending: false });
   if (error) throw error;
 
@@ -511,11 +561,11 @@ function statusButtons(o, sens) {
 
 /* ========================================================== ENTREPRISE */
 async function viewCompany() {
-  const c = state.company;
-  const isAdmin = state.profile.role === "admin";
+  const c = state.activeCompany;
+  const isAdmin = state.activeRole === "admin";
 
-  const { data: members } = await sb.from("profiles")
-    .select("id, full_name, discord_username, role, created_at")
+  const { data: members } = await sb.from("company_members")
+    .select("role, created_at, profiles(id, full_name, discord_username)")
     .eq("company_id", c.id).order("created_at");
 
   $("#view").innerHTML = head("Mon entreprise", "Ces informations sont visibles par les autres membres") + `
@@ -553,13 +603,13 @@ async function viewCompany() {
         <div class="card-pad" style="padding-bottom:.4rem"><h3>Membres (${members?.length || 0}/${c.max_members})</h3></div>
         <table><thead><tr><th>Nom</th><th>Rôle</th><th></th></tr></thead><tbody>
           ${(members || []).map(m => `<tr>
-            <td>${esc(m.full_name || m.discord_username || "—")}${m.id === state.user.id ? " (vous)" : ""}</td>
+            <td>${esc(m.profiles.full_name || m.profiles.discord_username || "—")}${m.profiles.id === state.user.id ? " (vous)" : ""}</td>
             <td><span class="badge ${m.role === "admin" ? "badge-ok" : ""}">${m.role === "admin" ? "Administrateur" : "Membre"}</span></td>
             <td class="num" style="white-space:nowrap">
-              ${isAdmin && m.id !== state.user.id ? `
-                ${m.role !== "admin" ? `<button class="btn btn-sm btn-ghost promote" data-id="${m.id}">Promouvoir</button>` : ""}
-                <button class="btn btn-sm btn-danger remove" data-id="${m.id}">Retirer</button>` : ""}
-              ${!isAdmin && m.id === state.user.id ? `<button class="btn btn-sm btn-danger leave">Quitter l'entreprise</button>` : ""}
+              ${isAdmin && m.profiles.id !== state.user.id ? `
+                ${m.role !== "admin" ? `<button class="btn btn-sm btn-ghost promote" data-id="${m.profiles.id}">Promouvoir</button>` : ""}
+                <button class="btn btn-sm btn-danger remove" data-id="${m.profiles.id}">Retirer</button>` : ""}
+              ${m.profiles.id === state.user.id ? `<button class="btn btn-sm btn-danger leave">Quitter l'entreprise</button>` : ""}
             </td></tr>`).join("")}
         </tbody></table>
       </div>
@@ -572,8 +622,10 @@ async function viewCompany() {
     const payload = Object.fromEntries([...f.entries()].map(([k, v]) => [k, String(v).trim() || null]));
     const { data, error } = await sb.from("companies").update(payload).eq("id", c.id).select().single();
     if (error) return toast(humanError(error), "err");
-    state.company = data;
-    $("#whoCompany").textContent = data.name;
+    state.activeCompany = data;
+    const m = state.memberships.find((x) => x.companies.id === c.id);
+    if (m) m.companies = data;
+    renderCompanyBox();
     toast("Fiche entreprise enregistrée", "ok");
   };
 
@@ -584,31 +636,30 @@ async function viewCompany() {
     };
     $("#regenCode").onclick = async () => {
       if (!confirm("L'ancien code ne fonctionnera plus. Continuer ?")) return;
-      const { data, error } = await sb.rpc("regenerate_invite_code");
+      const { data, error } = await sb.rpc("regenerate_invite_code", { p_company_id: c.id });
       if (error) return toast(humanError(error), "err");
-      state.company.invite_code = data;
+      state.activeCompany.invite_code = data;
       toast("Nouveau code généré", "ok"); route();
     };
     $$(".promote").forEach(b => b.onclick = async () => {
-      const { error } = await sb.rpc("promote_member", { p_profile_id: b.dataset.id });
+      const { error } = await sb.rpc("promote_member", { p_company_id: c.id, p_profile_id: b.dataset.id });
       if (error) return toast(humanError(error), "err");
       toast("Membre promu administrateur", "ok"); route();
     });
     $$(".remove").forEach(b => b.onclick = async () => {
       if (!confirm("Retirer ce membre de l'entreprise ?")) return;
-      const { error } = await sb.rpc("remove_member", { p_profile_id: b.dataset.id });
+      const { error } = await sb.rpc("remove_member", { p_company_id: c.id, p_profile_id: b.dataset.id });
       if (error) return toast(humanError(error), "err");
       toast("Membre retiré", "ok"); route();
     });
-  } else {
-    const leaveBtn = document.querySelector(".leave");
-    if (leaveBtn) leaveBtn.onclick = async () => {
-      if (!confirm("Quitter cette entreprise ?")) return;
-      const { error } = await sb.rpc("leave_company");
-      if (error) return toast(humanError(error), "err");
-      location.reload();
-    };
   }
+  const leaveBtn = document.querySelector(".leave");
+  if (leaveBtn) leaveBtn.onclick = async () => {
+    if (!confirm("Quitter cette entreprise ?")) return;
+    const { error } = await sb.rpc("leave_company", { p_company_id: c.id });
+    if (error) return toast(humanError(error), "err");
+    location.reload();
+  };
 }
 
 /* ============================================================= STAFF */
@@ -626,7 +677,7 @@ async function viewStaff() {
   if (e1) throw e1;
 
   const countMap = Object.fromEntries((counts || []).map(c => [c.company_id, c]));
-  const pending = (allProfiles || []).filter(p => !p.company_id);
+  const attachable = (allProfiles || []).filter(p => Number(p.company_count) < MAX_COMPANIES_PER_USER);
 
   $("#view").innerHTML = head("Console staff", "Créez et gérez toutes les entreprises sans y consommer de place",
     `<button class="btn btn-primary" id="btnNewCo">+ Nouvelle entreprise</button>`) + `
@@ -653,15 +704,16 @@ async function viewStaff() {
     </div>
 
     <div class="card">
-      <div class="card-pad" style="padding-bottom:.4rem"><h3>Comptes en attente de rattachement (${pending.length})</h3></div>
-      ${pending.length ? `<table><thead><tr><th>Discord</th><th>Connecté le</th><th>Rattacher à</th><th></th></tr></thead>
-      <tbody>${pending.map(p => `<tr>
+      <div class="card-pad" style="padding-bottom:.4rem"><h3>Rattacher un compte à une entreprise</h3>
+        <p class="hint" style="margin-top:.2rem">Comptes pouvant encore rejoindre une entreprise (moins de ${MAX_COMPANIES_PER_USER})</p></div>
+      ${attachable.length ? `<table><thead><tr><th>Discord</th><th class="num">Entreprises</th><th>Rattacher à</th><th></th></tr></thead>
+      <tbody>${attachable.map(p => `<tr>
         <td>${esc(p.full_name || p.discord_username || p.id)}</td>
-        <td class="hint">${dateFR(p.created_at)}</td>
+        <td class="num">${p.company_count}/${MAX_COMPANIES_PER_USER}</td>
         <td><select class="attachSelect" data-id="${p.id}"><option value="">Choisir une entreprise…</option>
           ${companies.filter(c => c.is_active).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></td>
         <td><button class="btn btn-sm btn-primary attachBtn" data-id="${p.id}">Attacher</button></td>
-      </tr>`).join("")}</tbody></table>` : `<div class="card-pad"><p class="hint">Aucun compte en attente.</p></div>`}
+      </tr>`).join("")}</tbody></table>` : `<div class="card-pad"><p class="hint">Tous les comptes ont atteint la limite.</p></div>`}
     </div>`;
 
   $("#btnNewCo").onclick = () => companyForm(null);
@@ -757,25 +809,38 @@ async function companyPanel(companyId, companyName) {
     return;
   }
 
-  $("#modalContent").innerHTML = `
-    <h3 style="margin-top:0">👥 Membres (${members.length})</h3>
-    ${members.length ? `<table><thead><tr><th>Nom</th><th>Rôle</th></tr></thead><tbody>
-      ${members.map(m => `<tr><td>${esc(m.full_name || m.discord_username || "—")}</td>
-        <td><span class="badge ${m.role === "admin" ? "badge-ok" : ""}">${m.role === "admin" ? "Administrateur" : "Membre"}</span></td></tr>`).join("")}
-    </tbody></table>` : `<p class="hint">Aucun membre.</p>`}
+  function renderMembers() {
+    $("#modalContent").innerHTML = `
+      <h3 style="margin-top:0">👥 Membres (${members.length})</h3>
+      ${members.length ? `<table><thead><tr><th>Nom</th><th>Rôle</th><th></th></tr></thead><tbody>
+        ${members.map(m => `<tr><td>${esc(m.full_name || m.discord_username || "—")}</td>
+          <td><span class="badge ${m.role === "admin" ? "badge-ok" : ""}">${m.role === "admin" ? "Administrateur" : "Membre"}</span></td>
+          <td class="num"><button class="btn btn-sm btn-danger staffRemove" data-id="${m.id}">Retirer l'accès</button></td></tr>`).join("")}
+      </tbody></table>` : `<p class="hint">Aucun membre.</p>`}
 
-    <h3>📦 Articles (${products.length})</h3>
-    ${products.length ? `<table><thead><tr><th>Article</th><th>Catégorie</th><th class="num">Prix HT</th><th class="num">Stock</th><th>État</th></tr></thead><tbody>
-      ${products.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.category || "—")}</td>
-        <td class="num">${money(p.price_ht)}</td><td class="num">${p.stock}</td>
-        <td><span class="badge ${p.is_active ? "badge-ok" : ""}">${p.is_active ? "En ligne" : "Masqué"}</span></td></tr>`).join("")}
-    </tbody></table>` : `<p class="hint">Aucun article.</p>`}
+      <h3>📦 Articles (${products.length})</h3>
+      ${products.length ? `<table><thead><tr><th>Article</th><th>Catégorie</th><th class="num">Prix HT</th><th class="num">Stock</th><th>État</th></tr></thead><tbody>
+        ${products.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.category || "—")}</td>
+          <td class="num">${money(p.price_ht)}</td><td class="num">${p.stock}</td>
+          <td><span class="badge ${p.is_active ? "badge-ok" : ""}">${p.is_active ? "En ligne" : "Masqué"}</span></td></tr>`).join("")}
+      </tbody></table>` : `<p class="hint">Aucun article.</p>`}
 
-    <h3>🧾 Commandes récentes (${orders.length})</h3>
-    ${orders.length ? `<table><thead><tr><th>Réf.</th><th>Type</th><th>Contrepartie</th><th>Statut</th><th class="num">Total HT</th></tr></thead><tbody>
-      ${orders.map(o => `<tr><td>${esc(o.reference)}</td><td>${o.sens === "vente" ? "📤 Vente" : "📥 Achat"}</td>
-        <td>${esc(o.other_name || "—")}</td><td><span class="badge ${STATUS[o.status]?.cls || ""}">${STATUS[o.status]?.label || o.status}</span></td>
-        <td class="num">${money(o.total_ht)}</td></tr>`).join("")}
-    </tbody></table>` : `<p class="hint">Aucune commande.</p>`}
-  `;
+      <h3>🧾 Commandes récentes (${orders.length})</h3>
+      ${orders.length ? `<table><thead><tr><th>Réf.</th><th>Type</th><th>Contrepartie</th><th>Statut</th><th class="num">Total HT</th></tr></thead><tbody>
+        ${orders.map(o => `<tr><td>${esc(o.reference)}</td><td>${o.sens === "vente" ? "📤 Vente" : "📥 Achat"}</td>
+          <td>${esc(o.other_name || "—")}</td><td><span class="badge ${STATUS[o.status]?.cls || ""}">${STATUS[o.status]?.label || o.status}</span></td>
+          <td class="num">${money(o.total_ht)}</td></tr>`).join("")}
+      </tbody></table>` : `<p class="hint">Aucune commande.</p>`}
+    `;
+    $$(".staffRemove").forEach(b => b.onclick = async () => {
+      if (!confirm("Retirer l'accès de ce membre à cette entreprise ?")) return;
+      const { error } = await sb.rpc("admin_remove_member", { p_company_id: companyId, p_profile_id: b.dataset.id });
+      if (error) return toast(humanError(error), "err");
+      toast("Accès retiré", "ok");
+      const idx = members.findIndex(m => m.id === b.dataset.id);
+      if (idx > -1) members.splice(idx, 1);
+      renderMembers();
+    });
+  }
+  renderMembers();
 }
