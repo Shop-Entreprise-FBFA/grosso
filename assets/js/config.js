@@ -17,5 +17,5 @@ window.CONFIG = {
   // Personnalisation
   APP_NAME: "Shop Entreprise FBFA",
   APP_TAGLINE: "La place de marché B2B des entreprises FlashbackFA",
-  CURRENCY: "EUR",
+  CURRENCY: "USD",
 };
