@@ -170,7 +170,9 @@ function addToCart(p, qty) {
   const line = state.cart.find((i) => i.product_id === p.id);
   if (line) line.qty += qty;
   else state.cart.push({
-    product_id: p.id, name: p.name, price: Number(p.price_ht), unit: p.unit,
+    product_id: p.id, name: p.name,
+    price: Number(p.price_ht) * (1 - (Number(p.discount_percent) || 0) / 100),
+    unit: p.unit,
     min_qty: p.min_qty, seller_id: p.company_id, seller_name: p.company_name, qty,
     weight_kg: p.weight_kg != null ? Number(p.weight_kg) : null,
   });
@@ -195,6 +197,7 @@ const VIEWS = {
   achats: viewPurchases,
   ventes: viewSales,
   entreprise: viewCompany,
+  stats: viewStats,
   staff: viewStaff,
   livraisons: viewDeliveries,
 };
@@ -330,14 +333,26 @@ async function viewCatalog() {
   render();
 }
 
-const productCard = (p) => `
+const productCard = (p) => {
+  const hasDiscount = p.discount_percent > 0;
+  const effPrice = hasDiscount ? p.price_ht * (1 - p.discount_percent / 100) : p.price_ht;
+  const stockBadge = p.stock <= 0
+    ? `<span class="badge badge-danger">Rupture — précommande possible</span>`
+    : (p.stock <= (p.low_stock_threshold ?? 5) ? `<span class="badge badge-warn">Stock faible</span>` : "");
+  return `
   <article class="card product">
     <div class="thumb">${p.image_url ? `<img src="${esc(p.image_url)}" alt="" loading="lazy">` : "📦"}</div>
     <div class="body">
-      <div class="seller">${esc(p.company_name)}${p.company_city ? " · " + esc(p.company_city) : ""}</div>
+      <div class="seller">${p.company_logo_url ? `<img src="${esc(p.company_logo_url)}" alt="" style="height:16px;vertical-align:middle;border-radius:3px;margin-right:.3rem">` : ""}${esc(p.company_name)}${p.company_city ? " · " + esc(p.company_city) : ""}</div>
       <div class="name">${esc(p.name)}</div>
       <div class="hint">${p.category ? esc(p.category) + " · " : ""}${p.stock > 0 ? p.stock + " en stock" : "stock à confirmer"}</div>
-      <div class="price">${money(p.price_ht)} <small>HT / ${esc(p.unit)}</small></div>
+      ${stockBadge}
+      ${p.promo_buy_x ? `<div class="hint">🎁 ${p.promo_buy_x} achetés = ${p.promo_get_y} offert(s)</div>` : ""}
+      <div class="price">
+        ${hasDiscount ? `<span style="text-decoration:line-through;color:var(--muted);font-size:.9em">${money(p.price_ht)}</span> ` : ""}
+        ${money(effPrice)} <small>HT / ${esc(p.unit)}</small>
+        ${hasDiscount ? ` <span class="badge badge-danger">-${p.discount_percent}%</span>` : ""}
+      </div>
       <div class="hint">Minimum : ${p.min_qty} ${esc(p.unit)}</div>
       <div class="actions">
         <input class="qty" type="number" min="${p.min_qty}" step="1" value="${p.min_qty}" aria-label="Quantité">
@@ -345,6 +360,7 @@ const productCard = (p) => `
       </div>
     </div>
   </article>`;
+};
 
 /* ======================================================= MES ARTICLES */
 async function viewMyProducts() {
@@ -352,23 +368,54 @@ async function viewMyProducts() {
     .eq("company_id", state.activeCompany.id).order("created_at", { ascending: false });
   if (error) throw error;
 
+  const { data: promos } = await sb.from("promo_codes").select("*")
+    .eq("company_id", state.activeCompany.id).order("created_at", { ascending: false });
+
+  const stockBadge = (p) => {
+    if (p.stock <= 0) return `<span class="badge badge-danger">Rupture</span>`;
+    if (p.stock <= p.low_stock_threshold) return `<span class="badge badge-warn">Stock faible</span>`;
+    return "";
+  };
+
   $("#view").innerHTML =
     head("Mes articles", "Ce que votre entreprise propose aux autres membres",
          `<button class="btn btn-primary" id="btnNew">+ Nouvel article</button>`) +
     (data.length ? `<div class="card"><table>
       <thead><tr><th>Article</th><th>Catégorie</th><th class="num">Prix HT</th><th class="num">Min.</th><th class="num">Stock</th><th>État</th><th></th></tr></thead>
       <tbody>${data.map(p => `<tr>
-        <td><b>${esc(p.name)}</b>${p.sku ? `<div class="hint">${esc(p.sku)}</div>` : ""}</td>
+        <td><b>${esc(p.name)}</b>${p.sku ? `<div class="hint">${esc(p.sku)}</div>` : ""}${p.discount_percent > 0 ? `<div class="hint">🏷️ -${p.discount_percent}%</div>` : ""}${p.promo_buy_x ? `<div class="hint">🎁 ${p.promo_buy_x} achetés = ${p.promo_get_y} offert(s)</div>` : ""}</td>
         <td>${esc(p.category || "—")}</td>
         <td class="num">${money(p.price_ht)}<div class="hint">/ ${esc(p.unit)}</div></td>
         <td class="num">${p.min_qty}</td>
-        <td class="num">${p.stock}</td>
-        <td><span class="badge ${p.is_active ? "badge-ok" : ""}">${p.is_active ? "En ligne" : "Masqué"}</span></td>
+        <td class="num">${p.stock}
+          <div style="display:flex;gap:.3rem;margin-top:.3rem;justify-content:flex-end">
+            <input type="number" class="qty restockInput" data-id="${p.id}" min="1" value="10" style="width:60px">
+            <button class="btn btn-sm btn-ghost restockBtn" data-id="${p.id}">+ stock</button>
+          </div>
+        </td>
+        <td>${stockBadge(p)} <span class="badge ${p.is_active ? "badge-ok" : ""}">${p.is_active ? "En ligne" : "Masqué"}</span></td>
         <td class="num" style="white-space:nowrap">
           <button class="btn btn-sm btn-ghost edit" data-id="${p.id}">Modifier</button>
           <button class="btn btn-sm btn-danger del" data-id="${p.id}">Suppr.</button>
         </td></tr>`).join("")}</tbody></table></div>`
-      : empty("📦", "Aucun article publié", "Ajoutez votre premier article pour apparaître dans le catalogue général."));
+      : empty("📦", "Aucun article publié", "Ajoutez votre premier article pour apparaître dans le catalogue général.")) +
+
+    `<div class="card" style="margin-top:1.2rem">
+      <div class="card-pad" style="display:flex;justify-content:space-between;align-items:center">
+        <h3 style="margin:0">🏷️ Codes promo</h3>
+        <button class="btn btn-sm btn-primary" id="btnNewPromo">+ Nouveau code</button>
+      </div>
+      ${promos && promos.length ? `<table><thead><tr><th>Code</th><th class="num">Remise</th><th class="num">Utilisations</th><th>Expire</th><th>État</th><th></th></tr></thead><tbody>
+        ${promos.map(pr => `<tr>
+          <td><code>${esc(pr.code)}</code></td>
+          <td class="num">${pr.discount_percent}%</td>
+          <td class="num">${pr.used_count}${pr.max_uses ? "/" + pr.max_uses : ""}</td>
+          <td>${pr.expires_at ? dateFR(pr.expires_at) : "—"}</td>
+          <td><span class="badge ${pr.is_active ? "badge-ok" : "badge-danger"}">${pr.is_active ? "Actif" : "Désactivé"}</span></td>
+          <td class="num"><button class="btn btn-sm btn-ghost togglePromo" data-id="${pr.id}" data-active="${pr.is_active}">${pr.is_active ? "Désactiver" : "Activer"}</button>
+            <button class="btn btn-sm btn-danger delPromo" data-id="${pr.id}">Suppr.</button></td>
+        </tr>`).join("")}</tbody></table>` : `<div class="card-pad"><p class="hint">Aucun code promo créé.</p></div>`}
+    </div>`;
 
   $("#btnNew").onclick = () => productForm(null);
   $$(".edit").forEach(b => b.onclick = () => productForm(data.find(p => p.id === b.dataset.id)));
@@ -378,6 +425,58 @@ async function viewMyProducts() {
     if (error) return toast(humanError(error), "err");
     toast("Article supprimé", "ok"); route();
   });
+  $$(".restockBtn").forEach(b => b.onclick = async () => {
+    const input = document.querySelector(`.restockInput[data-id="${b.dataset.id}"]`);
+    const amount = parseInt(input.value, 10);
+    if (!amount || amount <= 0) return toast("Quantité invalide", "err");
+    const p = data.find(x => x.id === b.dataset.id);
+    const { error } = await sb.from("products").update({ stock: p.stock + amount, updated_at: new Date().toISOString() }).eq("id", p.id);
+    if (error) return toast(humanError(error), "err");
+    toast(`+${amount} en stock`, "ok"); route();
+  });
+
+  $("#btnNewPromo").onclick = () => promoForm();
+  $$(".togglePromo").forEach(b => b.onclick = async () => {
+    const { error } = await sb.rpc("set_promo_code_active", { p_id: b.dataset.id, p_active: b.dataset.active !== "true" });
+    if (error) return toast(humanError(error), "err");
+    toast("Code mis à jour", "ok"); route();
+  });
+  $$(".delPromo").forEach(b => b.onclick = async () => {
+    if (!confirm("Supprimer ce code promo ?")) return;
+    const { error } = await sb.rpc("delete_promo_code", { p_id: b.dataset.id });
+    if (error) return toast(humanError(error), "err");
+    toast("Code supprimé", "ok"); route();
+  });
+}
+
+function promoForm() {
+  openModal("Nouveau code promo", `
+    <form id="prf">
+      <div class="field"><label>Code *</label><input name="code" required placeholder="ex: OILROX10" style="text-transform:uppercase"></div>
+      <div class="row">
+        <div class="field"><label>Remise (%) *</label><input name="discount_percent" type="number" min="1" max="100" step="1" required value="10"></div>
+        <div class="field"><label>Utilisations max (facultatif)</label><input name="max_uses" type="number" min="1" step="1" placeholder="illimité"></div>
+      </div>
+      <div class="field"><label>Date d'expiration (facultatif)</label><input name="expires_at" type="date"></div>
+      <div style="display:flex;gap:.6rem;justify-content:flex-end">
+        <button type="button" class="btn btn-ghost" id="prfCancel">Annuler</button>
+        <button type="submit" class="btn btn-primary">Créer</button>
+      </div>
+    </form>`);
+  $("#prfCancel").onclick = closeModal;
+  $("#prf").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const { error } = await sb.rpc("create_promo_code", {
+      p_company_id: state.activeCompany.id,
+      p_code: f.get("code").trim(),
+      p_discount_percent: Number(f.get("discount_percent")),
+      p_max_uses: f.get("max_uses").trim() === "" ? null : parseInt(f.get("max_uses"), 10),
+      p_expires_at: f.get("expires_at") ? f.get("expires_at") + "T23:59:59" : null,
+    });
+    if (error) return toast(humanError(error), "err");
+    closeModal(); toast("Code promo créé", "ok"); route();
+  };
 }
 
 function productForm(p) {
@@ -392,6 +491,14 @@ function productForm(p) {
       <div class="row">
         <div class="field"><label>Prix HT *</label><input name="price_ht" type="number" step="0.01" min="0" required value="${p?.price_ht ?? ""}"></div>
         <div class="field"><label>Unité de vente</label><select name="unit">${UNITS.map(u => `<option ${p?.unit === u ? "selected" : ""}>${u}</option>`).join("")}</select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Remise (%)</label><input name="discount_percent" type="number" step="1" min="0" max="100" value="${p?.discount_percent ?? 0}"></div>
+        <div class="field"><label>Seuil stock faible (alerte)</label><input name="low_stock_threshold" type="number" min="0" step="1" value="${p?.low_stock_threshold ?? 5}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Offre : achetez X…</label><input name="promo_buy_x" type="number" min="0" step="1" value="${p?.promo_buy_x ?? ""}" placeholder="ex: 3"></div>
+        <div class="field"><label>…Y offert(s)</label><input name="promo_get_y" type="number" min="0" step="1" value="${p?.promo_get_y ?? ""}" placeholder="ex: 1"></div>
       </div>
       <div class="row">
         <div class="field"><label>Quantité minimum</label><input name="min_qty" type="number" min="1" step="1" value="${p?.min_qty ?? 1}"></div>
@@ -422,6 +529,10 @@ function productForm(p) {
       min_qty: Math.max(parseInt(f.get("min_qty"), 10) || 1, 1),
       stock: parseInt(f.get("stock"), 10) || 0,
       weight_kg: f.get("weight_kg").trim() === "" ? null : Number(f.get("weight_kg")),
+      discount_percent: Math.min(Math.max(Number(f.get("discount_percent")) || 0, 0), 100),
+      low_stock_threshold: Math.max(parseInt(f.get("low_stock_threshold"), 10) || 0, 0),
+      promo_buy_x: f.get("promo_buy_x").trim() === "" ? null : parseInt(f.get("promo_buy_x"), 10),
+      promo_get_y: f.get("promo_get_y").trim() === "" ? null : parseInt(f.get("promo_get_y"), 10),
       image_url: f.get("image_url").trim() || null,
       is_active: f.get("is_active") === "on",
       updated_at: new Date().toISOString(),
@@ -495,6 +606,7 @@ async function viewCart() {
         </tr>`).join("")}</tbody></table>
         <div class="card-pad" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
           <input class="note" data-sid="${sid}" placeholder="Note pour le fournisseur (facultatif)" style="flex:1;min-width:200px">
+          <input class="promo" data-sid="${sid}" placeholder="Code promo (facultatif)" style="width:160px;text-transform:uppercase">
           <div style="display:flex;align-items:center;gap:1rem">
             <div><span class="hint">Total HT</span> <b style="font-size:1.2rem">${money(total)}</b></div>
             <button class="btn btn-primary order" data-sid="${sid}">Passer commande</button>
@@ -519,7 +631,8 @@ async function viewCart() {
     const items = state.cart.filter(i => i.seller_id === sid)
       .map(i => ({ product_id: i.product_id, quantity: i.qty }));
     const note = $(`.note[data-sid="${sid}"]`)?.value.trim() || null;
-    const { error } = await sb.rpc("place_order", { p_buyer: state.activeCompany.id, p_seller: sid, p_items: items, p_note: note });
+    const promo = $(`.promo[data-sid="${sid}"]`)?.value.trim() || null;
+    const { error } = await sb.rpc("place_order", { p_buyer: state.activeCompany.id, p_seller: sid, p_items: items, p_note: note, p_promo_code: promo });
     if (error) { b.disabled = false; b.textContent = "Passer commande"; return toast(humanError(error), "err"); }
     state.cart = state.cart.filter(i => i.seller_id !== sid); saveCart();
     toast("Commande envoyée au fournisseur", "ok");
@@ -547,7 +660,8 @@ async function viewCart() {
       for (const [sid] of sellers) {
         const items = state.cart.filter(i => i.seller_id === sid).map(i => ({ product_id: i.product_id, quantity: i.qty }));
         const note = $(`.note[data-sid="${sid}"]`)?.value.trim() || null;
-        const { data, error } = await sb.rpc("place_order", { p_buyer: state.activeCompany.id, p_seller: sid, p_items: items, p_note: note });
+        const promo = $(`.promo[data-sid="${sid}"]`)?.value.trim() || null;
+        const { data, error } = await sb.rpc("place_order", { p_buyer: state.activeCompany.id, p_seller: sid, p_items: items, p_note: note, p_promo_code: promo });
         if (error) { btn.disabled = false; btn.textContent = "Passer toutes les commandes (livraison groupée)"; return toast(humanError(error), "err"); }
         orderIds.push(data);
       }
@@ -599,6 +713,8 @@ async function ordersView(sens) {
           <span class="badge ${STATUS[o.status]?.cls || ""}" style="margin-left:.5rem">${STATUS[o.status]?.label || o.status}</span>
           <div class="hint">${sens === "achat" ? "Fournisseur" : "Client"} : <b>${esc(names[o[other]] || "—")}</b> · ${dateFR(o.created_at)}</div>
           ${o.note ? `<div class="hint">📝 ${esc(o.note)}</div>` : ""}
+          ${(o.order_items || []).some(i => i.is_backorder) ? `<span class="badge badge-warn">⏳ Contient de la précommande</span>` : ""}
+          ${o.promo_code ? `<div class="hint">🏷️ Code promo <b>${esc(o.promo_code)}</b> · -${money(o.discount_amount)}</div>` : ""}
           ${groupByOrder[o.id] ? `<div class="hint">🚚 Livraison groupée via <b>${esc(groupByOrder[o.id].name || "—")}</b> · ${groupByOrder[o.id].requested_date ? dateFR(groupByOrder[o.id].requested_date) : ""} · ${esc(groupByOrder[o.id].time_slot || "")}</div>` : ""}
         </div>
         <div style="text-align:right">
@@ -668,6 +784,8 @@ async function viewCompany() {
             <div class="field"><label>Téléphone</label><input name="phone" value="${esc(c.phone || "")}" ${isAdmin ? "" : "disabled"}></div>
           </div>
           <div class="field"><label>Présentation</label><textarea name="description" ${isAdmin ? "" : "disabled"}>${esc(c.description || "")}</textarea></div>
+          <div class="field"><label>Logo (URL de l'image)</label><input name="logo_url" type="url" value="${esc(c.logo_url || "")}" ${isAdmin ? "" : "disabled"} placeholder="https://…">
+            ${c.logo_url ? `<img src="${esc(c.logo_url)}" alt="" style="height:36px;margin-top:.4rem;border-radius:6px">` : ""}</div>
           ${c.is_delivery ? `<div class="field"><label>Tarif à la tonne (€ / 1000 kg)</label><input name="price_per_tonne" type="number" step="0.01" min="0" value="${c.price_per_tonne ?? ""}" ${isAdmin ? "" : "disabled"}></div>` : ""}
           ${isAdmin
             ? `<button class="btn btn-primary" type="submit">Enregistrer</button>`
@@ -754,6 +872,65 @@ async function viewCompany() {
   };
 }
 
+/* ========================================================= STATISTIQUES */
+async function viewStats() {
+  const cid = state.activeCompany.id;
+  const { data, error } = await sb.from("orders")
+    .select("total_ht, status, created_at, order_items(product_name, quantity, line_total)")
+    .eq("seller_company_id", cid)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+
+  const valid = data.filter(o => o.status !== "annulee");
+
+  const byMonth = {};
+  valid.forEach(o => {
+    const key = new Date(o.created_at).toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+    byMonth[key] = (byMonth[key] || 0) + Number(o.total_ht);
+  });
+  const months = Object.entries(byMonth);
+
+  const byProduct = {};
+  valid.forEach(o => (o.order_items || []).forEach(i => {
+    if (!byProduct[i.product_name]) byProduct[i.product_name] = { qty: 0, total: 0 };
+    byProduct[i.product_name].qty += i.quantity;
+    byProduct[i.product_name].total += Number(i.line_total);
+  }));
+  const topProducts = Object.entries(byProduct).sort((a, b) => b[1].qty - a[1].qty).slice(0, 10);
+
+  const totalCA = valid.reduce((s, o) => s + Number(o.total_ht), 0);
+  const maxMonth = Math.max(1, ...months.map(([, v]) => v));
+
+  $("#view").innerHTML = head("Statistiques", "Vos ventes sur la place de marché") + `
+    <div class="grid stats">
+      <div class="stat"><div class="label">Chiffre d'affaires total HT</div><div class="value">${money(totalCA)}</div>
+        <div class="sub">${valid.length} commande(s) valide(s)</div></div>
+      <div class="stat"><div class="label">Panier moyen</div><div class="value">${money(valid.length ? totalCA / valid.length : 0)}</div></div>
+      <div class="stat"><div class="label">Articles différents vendus</div><div class="value">${Object.keys(byProduct).length}</div></div>
+    </div>
+
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+      <div class="card">
+        <div class="card-pad" style="padding-bottom:.4rem"><h3>CA par mois</h3></div>
+        ${months.length ? `<div class="card-pad" style="display:flex;flex-direction:column;gap:.5rem">
+          ${months.map(([m, v]) => `<div>
+            <div style="display:flex;justify-content:space-between;font-size:.9rem"><span>${esc(m)}</span><b>${money(v)}</b></div>
+            <div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden">
+              <div style="background:var(--primary,#3b82f6);height:100%;width:${Math.max((v / maxMonth) * 100, 3)}%"></div>
+            </div>
+          </div>`).join("")}
+        </div>` : `<div class="card-pad"><p class="hint">Aucune vente pour l'instant.</p></div>`}
+      </div>
+
+      <div class="card">
+        <div class="card-pad" style="padding-bottom:.4rem"><h3>Top articles vendus</h3></div>
+        ${topProducts.length ? `<table><thead><tr><th>Article</th><th class="num">Qté vendue</th><th class="num">CA généré</th></tr></thead><tbody>
+          ${topProducts.map(([name, v]) => `<tr><td>${esc(name)}</td><td class="num">${v.qty}</td><td class="num">${money(v.total)}</td></tr>`).join("")}
+        </tbody></table>` : `<div class="card-pad"><p class="hint">Aucune vente pour l'instant.</p></div>`}
+      </div>
+    </div>`;
+}
+
 /* ============================================================= STAFF */
 async function viewStaff() {
   if (!state.profile.is_staff) {
@@ -780,7 +957,7 @@ async function viewStaff() {
       <tbody>${companies.map(c => {
         const cnt = countMap[c.id] || { member_count: 0 };
         return `<tr>
-          <td><b>${esc(c.name)}</b><div class="hint">${esc(c.sector || "—")}</div></td>
+          <td><b>${c.logo_url ? `<img src="${esc(c.logo_url)}" alt="" style="height:18px;vertical-align:middle;border-radius:3px;margin-right:.3rem">` : ""}${esc(c.name)}</b><div class="hint">${esc(c.sector || "—")}</div></td>
           <td>${esc(c.city || "—")}</td>
           <td class="num">${cnt.member_count}/${c.max_members}</td>
           <td><code>${esc(c.invite_code || "—")}</code></td>
@@ -860,6 +1037,8 @@ function companyForm(c) {
       <div class="field"><label style="display:flex;gap:.5rem;align-items:center;font-size:.95rem;color:var(--text)">
         <input type="checkbox" name="is_delivery" style="width:auto" ${c?.is_delivery ? "checked" : ""}> Entreprise de livraison (ex: Post OP)</label></div>
       <div class="field"><label>Tarif à la tonne (€ / 1000 kg)</label><input name="price_per_tonne" type="number" step="0.01" min="0" value="${c?.price_per_tonne ?? ""}" placeholder="ex: 150"></div>
+      <div class="field"><label>Logo (URL de l'image)</label><input name="logo_url" type="url" value="${esc(c?.logo_url || "")}" placeholder="https://…">
+        ${c?.logo_url ? `<img src="${esc(c.logo_url)}" alt="" style="height:36px;margin-top:.4rem;border-radius:6px">` : ""}</div>
       <div style="display:flex;gap:.6rem;justify-content:flex-end">
         <button type="button" class="btn btn-ghost" id="cofCancel">Annuler</button>
         <button type="submit" class="btn btn-primary">${c ? "Enregistrer" : "Créer"}</button>
@@ -881,6 +1060,7 @@ function companyForm(c) {
       p_discord_channel_id: f.get("discord_channel_id").trim() || null,
       p_is_delivery: f.get("is_delivery") === "on",
       p_price_per_tonne: f.get("price_per_tonne").trim() === "" ? null : Number(f.get("price_per_tonne")),
+      p_logo_url: f.get("logo_url").trim() || null,
     };
     let error;
     if (c) {
@@ -976,12 +1156,22 @@ async function companyPanel(companyId, companyName) {
       </tbody></table>` : `<p class="hint">Aucun article.</p>`}
 
       <h3>🧾 Commandes récentes (${orders.length})</h3>
-      ${orders.length ? `<table><thead><tr><th>Réf.</th><th>Type</th><th>Contrepartie</th><th>Statut</th><th class="num">Total HT</th></tr></thead><tbody>
+      ${orders.length ? `<table><thead><tr><th>Réf.</th><th>Type</th><th>Contrepartie</th><th>Statut</th><th class="num">Total HT</th><th></th></tr></thead><tbody>
         ${orders.map(o => `<tr><td>${esc(o.reference)}</td><td>${o.sens === "vente" ? "📤 Vente" : "📥 Achat"}</td>
           <td>${esc(o.other_name || "—")}</td><td><span class="badge ${STATUS[o.status]?.cls || ""}">${STATUS[o.status]?.label || o.status}</span></td>
-          <td class="num">${money(o.total_ht)}</td></tr>`).join("")}
+          <td class="num">${money(o.total_ht)}</td>
+          <td class="num"><button class="btn btn-sm btn-danger staffDelOrder" data-id="${o.id}">Suppr.</button></td></tr>`).join("")}
       </tbody></table>` : `<p class="hint">Aucune commande.</p>`}
     `;
+    $$(".staffDelOrder").forEach(b => b.onclick = async () => {
+      if (!confirm("Supprimer définitivement cette commande ?")) return;
+      const { error } = await sb.rpc("admin_delete_order", { p_order_id: b.dataset.id });
+      if (error) return toast(humanError(error), "err");
+      toast("Commande supprimée", "ok");
+      const idx = orders.findIndex(o => o.id === b.dataset.id);
+      if (idx > -1) orders.splice(idx, 1);
+      renderMembers();
+    });
     $$(".staffRemove").forEach(b => b.onclick = async () => {
       if (!confirm("Retirer l'accès de ce membre à cette entreprise ?")) return;
       const { error } = await sb.rpc("admin_remove_member", { p_company_id: companyId, p_profile_id: b.dataset.id });
