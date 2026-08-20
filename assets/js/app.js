@@ -46,13 +46,12 @@ const state = { user: null, profile: null, memberships: [], activeCompany: null,
 
   loadCart();
 
-  $("#brandName").textContent = window.CONFIG.APP_NAME || "Grosso";
+  $("#logout").onclick = async () => { await sb.auth.signOut(); location.replace("index.html"); };
   const discordName = state.user.user_metadata?.full_name
     || state.user.user_metadata?.name
     || state.user.user_metadata?.preferred_username
     || "Discord";
   $("#whoEmail").textContent = discordName;
-  $("#logout").onclick = async () => { await sb.auth.signOut(); location.replace("index.html"); };
   $("#modalClose").onclick = closeModal;
   $("#modalBg").onclick = (e) => { if (e.target.id === "modalBg") closeModal(); };
   $("#joinMoreBtn").onclick = openJoinMoreModal;
@@ -460,12 +459,18 @@ async function viewCart() {
           <div class="field"><label>Date souhaitée</label><input id="deliveryDate" type="date"></div>
         </div>
         <div class="field"><label>Créneau horaire</label><select id="deliverySlot">
+          <option value="0h-2h">0h - 2h</option>
+          <option value="2h-4h">2h - 4h</option>
+          <option value="4h-6h">4h - 6h</option>
+          <option value="6h-8h">6h - 8h</option>
           <option value="8h-10h">8h - 10h</option>
           <option value="10h-12h">10h - 12h</option>
           <option value="12h-14h">12h - 14h</option>
           <option value="14h-16h">14h - 16h</option>
           <option value="16h-18h">16h - 18h</option>
           <option value="18h-20h">18h - 20h</option>
+          <option value="20h-22h">20h - 22h</option>
+          <option value="22h-0h">22h - 0h</option>
         </select></div>
         <p class="hint">Poids total estimé : <b>${totalWeight.toFixed(1)} kg</b>${missingWeight ? " — certains articles n'ont pas de poids renseigné, le tarif final sera confirmé par le livreur." : ""}</p>
         <button class="btn btn-primary" id="btnGroupedOrder">Passer toutes les commandes (livraison groupée)</button>
