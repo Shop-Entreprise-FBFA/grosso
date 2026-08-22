@@ -832,63 +832,102 @@ async function generateInvoice(o) {
   ]);
   if (!seller || !buyer) return toast("Impossible de générer la facture", "err");
 
+  let deliveryInfo = "";
+  const { data: link } = await sb.from("delivery_group_orders")
+    .select("delivery_groups(time_slot, requested_date, delivery_company_id)")
+    .eq("order_id", o.id).maybeSingle();
+  if (link && link.delivery_groups) {
+    const { data: delivCo } = await sb.from("companies").select("name").eq("id", link.delivery_groups.delivery_company_id).single();
+    deliveryInfo = `
+      <div>
+        <div style="font-size:10px;letter-spacing:.14em;color:#a39c88;font-weight:600;margin-bottom:.5rem">LIVRAISON</div>
+        <div style="font-weight:600;font-size:15px;color:#1a1d24">${esc(delivCo?.name || "—")}</div>
+        <div style="font-size:12.5px;color:#8a8478;margin-top:.15rem">${link.delivery_groups.requested_date ? dateFR(link.delivery_groups.requested_date) : ""} · ${esc(link.delivery_groups.time_slot || "")}</div>
+      </div>`;
+  }
+
+  const initials = seller.name.split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase();
   const rows = (o.order_items || []).map(i => `
     <tr>
-      <td>${esc(i.product_name)}</td>
-      <td style="text-align:right">${i.quantity} ${esc(i.unit || "")}</td>
-      <td style="text-align:right">${money(i.unit_price_ht)}</td>
-      <td style="text-align:right">${money(i.line_total)}</td>
+      <td style="padding:.85rem 0;font-size:14px;color:#1a1d24;border-top:1px solid #ece7dc">${esc(i.product_name)}</td>
+      <td style="padding:.85rem 0;text-align:right;font-size:14px;color:#6b7280;border-top:1px solid #ece7dc">${i.quantity}</td>
+      <td style="padding:.85rem 0;text-align:right;font-size:14px;color:#6b7280;border-top:1px solid #ece7dc">${money(i.unit_price_ht)}</td>
+      <td style="padding:.85rem 0;text-align:right;font-size:14px;color:#1a1d24;font-weight:600;border-top:1px solid #ece7dc">${money(i.line_total)}</td>
     </tr>`).join("");
 
   const html = `<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8"><title>Facture ${esc(o.reference)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Cormorant+Garamond:wght@500;600&display=swap" rel="stylesheet">
 <style>
-  body{font-family:Arial,Helvetica,sans-serif;color:#151a21;max-width:760px;margin:2rem auto;padding:0 1rem}
-  .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1f5eff;padding-bottom:1.2rem;margin-bottom:1.5rem}
-  .head img{height:50px;margin-bottom:.5rem}
-  .head h1{font-size:1.5rem;margin:0 0 .3rem}
-  .parties{display:flex;justify-content:space-between;gap:2rem;margin-bottom:2rem}
-  .parties .box{flex:1}
-  .parties h3{font-size:.8rem;text-transform:uppercase;color:#666f7d;margin:0 0 .4rem}
-  table{width:100%;border-collapse:collapse;margin-bottom:1.5rem}
-  th{text-align:left;font-size:.78rem;text-transform:uppercase;color:#666f7d;border-bottom:2px solid #e2e5ea;padding:.5rem}
-  td{padding:.6rem .5rem;border-bottom:1px solid #e2e5ea}
-  .totals{margin-left:auto;width:280px}
-  .totals div{display:flex;justify-content:space-between;padding:.3rem 0}
-  .totals .grand{font-size:1.2rem;font-weight:700;border-top:2px solid #151a21;padding-top:.5rem;margin-top:.3rem}
-  .no-print{margin-top:2rem}
-  @media print{.no-print{display:none}}
+  body{margin:0;padding:2.5rem 1rem;background:#eceef1;font-family:'Inter',Arial,sans-serif}
+  .invoice{background:#fdfcfa;border-radius:16px;overflow:hidden;max-width:640px;margin:0 auto;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+  .no-print{display:flex;justify-content:center;margin-top:1.5rem}
+  @media print{ body{background:#fff;padding:0} .invoice{box-shadow:none;border-radius:0;max-width:100%} .no-print{display:none} }
 </style></head>
 <body>
-  <div class="head">
-    <div>
-      ${seller.logo_url ? `<img src="${esc(seller.logo_url)}" alt="">` : ""}
-      <h1>${esc(seller.name)}</h1>
-      <div>${esc(seller.city || "")}${seller.city && seller.country ? ", " : ""}${esc(seller.country || "")}</div>
-      ${seller.phone ? `<div>${esc(seller.phone)}</div>` : ""}
+<div class="invoice">
+  <div style="background:#0f1420;padding:2.6rem 2.8rem 2.2rem;position:relative">
+    <div style="position:absolute;top:0;right:0;width:180px;height:180px;background:radial-gradient(circle at top right, rgba(201,162,75,.12), transparent 70%)"></div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        ${seller.logo_url
+          ? `<img src="${esc(seller.logo_url)}" alt="" style="height:50px;max-width:160px;object-fit:contain;margin-bottom:1rem;display:block">`
+          : `<div style="width:50px;height:50px;border-radius:50%;border:1px solid #c9a24b;display:flex;align-items:center;justify-content:center;font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:600;color:#c9a24b;margin-bottom:1rem">${esc(initials)}</div>`}
+        <div style="font-family:'Cormorant Garamond',serif;font-size:1.7rem;font-weight:600;color:#fff;letter-spacing:.01em">${esc(seller.name)}</div>
+        <div style="font-size:12px;color:#8b93a5;margin-top:.35rem;letter-spacing:.03em">${[seller.city, seller.country].filter(Boolean).map(esc).join(", ").toUpperCase()}${seller.phone ? ` &nbsp;·&nbsp; TÉL. ${esc(seller.phone)}` : ""}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-family:'Cormorant Garamond',serif;font-size:2.1rem;font-weight:600;color:#c9a24b;letter-spacing:.02em;line-height:1">Facture</div>
+        <div style="font-size:12px;color:#8b93a5;margin-top:.6rem;letter-spacing:.05em">N° ${esc(o.reference)}</div>
+        <div style="font-size:12px;color:#8b93a5;letter-spacing:.05em">${dateFR(o.created_at).toUpperCase()}</div>
+      </div>
     </div>
-    <div style="text-align:right">
-      <h1>FACTURE</h1>
-      <div><b>${esc(o.reference)}</b></div>
-      <div>${dateFR(o.created_at)}</div>
+  </div>
+
+  <div style="padding:2.2rem 2.8rem 1rem">
+    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:2rem;align-items:start;margin-bottom:2.2rem;padding-bottom:1.6rem;border-bottom:1px solid #ece7dc">
+      <div>
+        <div style="font-size:10px;letter-spacing:.14em;color:#a39c88;font-weight:600;margin-bottom:.5rem">FACTURÉ À</div>
+        <div style="font-weight:600;font-size:15px;color:#1a1d24">${esc(buyer.name)}</div>
+      </div>
+      ${deliveryInfo || "<div></div>"}
+      <div style="text-align:right">
+        <div style="font-size:10px;letter-spacing:.14em;color:#a39c88;font-weight:600;margin-bottom:.5rem">STATUT</div>
+        <span style="display:inline-block;padding:.3em .85em;font-size:11px;font-weight:600;letter-spacing:.04em;background:${STATUS[o.status]?.cls === "badge-ok" ? "#eaf3de;color:#27500a" : STATUS[o.status]?.cls === "badge-danger" ? "#fcebeb;color:#791f1f" : "#e6f1fb;color:#0c447c"};border-radius:20px">${(STATUS[o.status]?.label || o.status).toUpperCase()}</span>
+      </div>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;margin-bottom:1.8rem">
+      <thead><tr>
+        <th style="text-align:left;font-size:10px;letter-spacing:.1em;color:#a39c88;font-weight:600;padding:0 0 .7rem">ARTICLE</th>
+        <th style="text-align:right;font-size:10px;letter-spacing:.1em;color:#a39c88;font-weight:600;padding:0 0 .7rem">QTÉ</th>
+        <th style="text-align:right;font-size:10px;letter-spacing:.1em;color:#a39c88;font-weight:600;padding:0 0 .7rem">P.U.</th>
+        <th style="text-align:right;font-size:10px;letter-spacing:.1em;color:#a39c88;font-weight:600;padding:0 0 .7rem">MONTANT</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+
+    <div style="display:flex;justify-content:flex-end;margin-bottom:1.8rem">
+      <div style="width:270px">
+        ${o.discount_amount > 0 ? `
+        <div style="display:flex;justify-content:space-between;padding:.3rem 0;font-size:13px;color:#6b7280"><span>Sous-total</span><span>${money(o.total_ht + Number(o.discount_amount))}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:.3rem 0;font-size:13px;color:#a3572f"><span>Remise${o.promo_code ? " · " + esc(o.promo_code) : ""}</span><span>−${money(o.discount_amount)}</span></div>` : ""}
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding-top:.7rem;margin-top:.5rem;border-top:1.5px solid #1a1d24">
+          <span style="font-size:11px;letter-spacing:.1em;color:#a39c88;font-weight:600">TOTAL HT</span>
+          <span style="font-family:'Cormorant Garamond',serif;font-size:1.9rem;font-weight:600;color:#1a1d24">${money(o.total_ht)}</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;padding-top:1.6rem;border-top:1px solid #ece7dc">
+      <div style="font-size:11.5px;color:#a39c88;line-height:1.7;max-width:280px">Merci de votre confiance.<br>Facture générée automatiquement par Shop Entreprise FBFA.</div>
     </div>
   </div>
-  <div class="parties">
-    <div class="box"><h3>Vendeur</h3><div><b>${esc(seller.name)}</b></div></div>
-    <div class="box"><h3>Client</h3><div><b>${esc(buyer.name)}</b></div></div>
-  </div>
-  <table>
-    <thead><tr><th>Article</th><th style="text-align:right">Qté</th><th style="text-align:right">P.U. HT</th><th style="text-align:right">Total</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>
-  <div class="totals">
-    ${o.discount_amount > 0 ? `<div><span>Sous-total</span><span>${money(o.total_ht + Number(o.discount_amount))}</span></div>
-    <div><span>Remise ${o.promo_code ? "(" + esc(o.promo_code) + ")" : ""}</span><span>-${money(o.discount_amount)}</span></div>` : ""}
-    <div class="grand"><span>Total HT</span><span>${money(o.total_ht)}</span></div>
-  </div>
-  <div class="no-print">
-    <button onclick="window.print()" style="padding:.7em 1.4em;font-size:1rem;cursor:pointer;background:#1f5eff;color:#fff;border:0;border-radius:8px">🖨️ Imprimer / Enregistrer en PDF</button>
-  </div>
+</div>
+<div class="no-print">
+  <button onclick="window.print()" style="padding:.7em 1.6em;font-size:1rem;cursor:pointer;background:#1a1d24;color:#fff;border:0;border-radius:8px">Imprimer / Enregistrer en PDF</button>
+</div>
 </body></html>`;
 
   const blob = new Blob([html], { type: "text/html" });
