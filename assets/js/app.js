@@ -806,6 +806,7 @@ async function ordersView(sens) {
         <td class="num">${i.quantity} ${esc(i.unit || "")}</td><td class="num">${money(i.line_total)}</td></tr>`).join("")}
       </tbody></table>
       <div class="card-pad" style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap">
+        <button class="btn btn-sm btn-ghost invoice" data-id="${o.id}">🧾 Facture</button>
         ${statusButtons(o, sens)}
       </div>
     </div>`).join("")
@@ -821,6 +822,78 @@ async function ordersView(sens) {
     if (error) return toast(humanError(error), "err");
     toast("Statut mis à jour", "ok"); route();
   });
+  $$(".invoice").forEach(b => b.onclick = () => generateInvoice(data.find(o => o.id === b.dataset.id)));
+}
+
+async function generateInvoice(o) {
+  const [{ data: seller }, { data: buyer }] = await Promise.all([
+    sb.from("companies").select("*").eq("id", o.seller_company_id).single(),
+    sb.from("companies").select("*").eq("id", o.buyer_company_id).single(),
+  ]);
+  if (!seller || !buyer) return toast("Impossible de générer la facture", "err");
+
+  const rows = (o.order_items || []).map(i => `
+    <tr>
+      <td>${esc(i.product_name)}</td>
+      <td style="text-align:right">${i.quantity} ${esc(i.unit || "")}</td>
+      <td style="text-align:right">${money(i.unit_price_ht)}</td>
+      <td style="text-align:right">${money(i.line_total)}</td>
+    </tr>`).join("");
+
+  const html = `<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"><title>Facture ${esc(o.reference)}</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;color:#151a21;max-width:760px;margin:2rem auto;padding:0 1rem}
+  .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1f5eff;padding-bottom:1.2rem;margin-bottom:1.5rem}
+  .head img{height:50px;margin-bottom:.5rem}
+  .head h1{font-size:1.5rem;margin:0 0 .3rem}
+  .parties{display:flex;justify-content:space-between;gap:2rem;margin-bottom:2rem}
+  .parties .box{flex:1}
+  .parties h3{font-size:.8rem;text-transform:uppercase;color:#666f7d;margin:0 0 .4rem}
+  table{width:100%;border-collapse:collapse;margin-bottom:1.5rem}
+  th{text-align:left;font-size:.78rem;text-transform:uppercase;color:#666f7d;border-bottom:2px solid #e2e5ea;padding:.5rem}
+  td{padding:.6rem .5rem;border-bottom:1px solid #e2e5ea}
+  .totals{margin-left:auto;width:280px}
+  .totals div{display:flex;justify-content:space-between;padding:.3rem 0}
+  .totals .grand{font-size:1.2rem;font-weight:700;border-top:2px solid #151a21;padding-top:.5rem;margin-top:.3rem}
+  .no-print{margin-top:2rem}
+  @media print{.no-print{display:none}}
+</style></head>
+<body>
+  <div class="head">
+    <div>
+      ${seller.logo_url ? `<img src="${esc(seller.logo_url)}" alt="">` : ""}
+      <h1>${esc(seller.name)}</h1>
+      <div>${esc(seller.city || "")}${seller.city && seller.country ? ", " : ""}${esc(seller.country || "")}</div>
+      ${seller.phone ? `<div>${esc(seller.phone)}</div>` : ""}
+    </div>
+    <div style="text-align:right">
+      <h1>FACTURE</h1>
+      <div><b>${esc(o.reference)}</b></div>
+      <div>${dateFR(o.created_at)}</div>
+    </div>
+  </div>
+  <div class="parties">
+    <div class="box"><h3>Vendeur</h3><div><b>${esc(seller.name)}</b></div></div>
+    <div class="box"><h3>Client</h3><div><b>${esc(buyer.name)}</b></div></div>
+  </div>
+  <table>
+    <thead><tr><th>Article</th><th style="text-align:right">Qté</th><th style="text-align:right">P.U. HT</th><th style="text-align:right">Total</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="totals">
+    ${o.discount_amount > 0 ? `<div><span>Sous-total</span><span>${money(o.total_ht + Number(o.discount_amount))}</span></div>
+    <div><span>Remise ${o.promo_code ? "(" + esc(o.promo_code) + ")" : ""}</span><span>-${money(o.discount_amount)}</span></div>` : ""}
+    <div class="grand"><span>Total HT</span><span>${money(o.total_ht)}</span></div>
+  </div>
+  <div class="no-print">
+    <button onclick="window.print()" style="padding:.7em 1.4em;font-size:1rem;cursor:pointer;background:#1f5eff;color:#fff;border:0;border-radius:8px">🖨️ Imprimer / Enregistrer en PDF</button>
+  </div>
+</body></html>`;
+
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank");
 }
 
 function statusButtons(o, sens) {
